@@ -7,42 +7,82 @@
 <link rel="stylesheet" href="/assets/dashboard.css">
 </head>
 <body>
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="topbar-brand">
+      <a href="/" class="brand-link">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <span class="brand-name">dashd</span>
+      </a>
+      <span class="topbar-divider" aria-hidden="true">/</span>
+      <span class="scan-status-pill" title="{{.ScanSummary}}">{{.ScanSummary}}</span>
+    </div>
+    <div class="topbar-actions">
+      <span class="generated-meta">Updated {{.Generated}}</span>
+      <button type="button" id="filter-toggle" class="btn btn-secondary" aria-expanded="{{if .FilterState.Active}}true{{else}}false{{end}}" aria-controls="filter-panel">
+        Filters <span id="filter-badge" class="pill-count" hidden>0</span>
+      </button>
+      <button type="button" data-reload class="btn btn-secondary" title="Reload latest data (r)">Refresh</button>
+      <button type="button" id="theme-toggle" class="btn btn-icon" aria-label="Toggle light/dark theme" title="Toggle light/dark theme">&#9788;</button>
+    </div>
+  </div>
+</div>
+
 <div class="container">
   <header class="page-header">
-    <h1>Agent Cost Dashboard</h1>
-    <p class="subtitle">
-      Generated on {{.Generated}} &middot;
-      <a href="#" data-reload>Refresh for latest</a>
-    </p>
-    <p class="scan-status" title="{{.ScanSummary}}">{{.ScanSummary}}</p>
+    <div class="page-header-row">
+      <div>
+        <h1>Agent Cost Dashboard</h1>
+        <p class="subtitle">
+          Generated on {{.Generated}} &middot;
+          <a href="#" data-reload>Refresh for latest</a>
+        </p>
+      </div>
+      <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Dashboard views">
+        <button type="button" class="view-tab is-active" role="tab" aria-selected="true" data-view-tab="overview">Overview</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="sessions">Sessions</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="breakdown">Breakdowns</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="system">System</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="all">All</button>
+      </nav>
+    </div>
   </header>
 
-  <div class="filter-bar">
-    <form method="get" action="/">
+  <div class="filter-toolbar" id="filter-toolbar">
+    <div class="date-presets" role="group" aria-label="Quick date ranges">
+      <span class="presets-label">Range:</span>
+      <button type="button" class="preset-btn" data-date-preset="today">Today</button>
+      <button type="button" class="preset-btn" data-date-preset="7d">7d</button>
+      <button type="button" class="preset-btn" data-date-preset="30d">30d</button>
+      <button type="button" class="preset-btn" data-date-preset="all">All time</button>
+    </div>
+    <div class="active-filter-chips" id="active-filter-chips"></div>
+  </div>
+
+  <div class="filter-bar{{if not .FilterState.Active}} is-collapsed{{end}}" id="filter-panel">
+    <form method="get" action="/" id="filter-form">
       <div class="filter-group">
-        <label for="model">Model</label>
-        <select name="model" id="model" multiple size="6">
+        <label for="model">Model <span class="hint">(Ctrl/Cmd for multi)</span></label>
+        <select name="model" id="model" multiple size="5">
           {{range .Facets.Models}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </div>
       <div class="filter-group">
         <label for="agent">Program</label>
-        <select name="agent" id="agent" multiple size="6">
+        <select name="agent" id="agent" multiple size="5">
           {{range .Facets.Agents}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </div>
       <div class="filter-group">
         <label for="project">Project</label>
-        <select name="project" id="project" multiple size="6">
+        <select name="project" id="project" multiple size="5">
           {{range .Facets.Projects}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </div>
-      <div class="filter-group">
+      <div class="filter-group filter-dates">
         <label for="date_from">Date from</label>
         <input type="date" name="date_from" id="date_from" min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}">
-      </div>
-      <div class="filter-group">
-        <label for="date_to">Date to</label>
+        <label for="date_to" style="margin-top:8px">Date to</label>
         <input type="date" name="date_to" id="date_to" min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}">
       </div>
       <div class="filter-actions">
@@ -56,7 +96,7 @@
   </div>
 
   {{if .SourcesNeedAction}}
-  <div class="section source-panel">
+  <div class="section source-panel" data-view-section="overview system">
     <div class="section-header">
       <span>Sources</span>
       <span class="badge">{{.SourcesSummary}}</span>
@@ -90,7 +130,7 @@
   </div>
   {{end}}
 
-  <div class="burn-rate" id="burn-rate">
+  <div class="burn-rate" id="burn-rate" data-view-section="overview">
     {{range .Burn}}
     <div class="burn-card">
       <div class="burn-label">{{.Label}}</div>
@@ -100,9 +140,9 @@
     </div>
     {{end}}
   </div>
-  <p class="burn-note">{{.BurnNote}}</p>
+  <p class="burn-note" data-view-section="overview">{{.BurnNote}}</p>
 
-  <div class="stats-grid">
+  <div class="stats-grid" data-view-section="overview">
     {{range .StatCards}}
     <div class="stat-card{{if .Wide}} token-card{{end}}">
       <div class="label">{{.Label}}</div>
@@ -116,7 +156,7 @@
     {{end}}
   </div>
 
-  <div class="section">
+  <div class="section" data-view-section="overview">
     <div class="section-header">
       <span>Activity &amp; Throughput</span>
       <span class="badge" id="activity-window-badge"></span>
@@ -185,19 +225,19 @@
     </div>
   </div>
 
-  <div class="section">
+  <div class="section" data-view-section="overview">
     <div class="section-header"><span>Daily Spending</span></div>
     <div class="daily-chart" id="daily-chart-content"></div>
   </div>
 
-  <div class="section">
+  <div class="section" data-view-section="sessions">
     <div class="section-header">
       <span>All Sessions</span>
       <span class="badge" id="sessions-count"></span>
     </div>
     <div class="table-toolbar">
       <input type="search" id="sessions-search" class="table-search"
-             placeholder="Filter by project, path, or agent&hellip;"
+             placeholder="Filter by project, path, or agent&hellip; (press /)"
              aria-label="Filter sessions">
       <span class="table-count" id="sessions-shown"></span>
       <div class="pager">
@@ -224,7 +264,15 @@
     </table>
   </div>
 
-  <div class="section">
+  <div class="sub-tabs" id="breakdown-tabs" data-view-section="breakdown" role="tablist" aria-label="Breakdown tables">
+    <button type="button" class="sub-tab is-active" role="tab" aria-selected="true" data-breakdown-tab="all">All breakdowns</button>
+    <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="models">Models</button>
+    <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="providers">Providers</button>
+    <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="projects">Projects</button>
+    <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="tools">Tools</button>
+  </div>
+
+  <div class="section" data-view-section="breakdown" data-breakdown-panel="providers">
     <div class="section-header"><span>Model Providers</span></div>
     <table id="providers-table">
       <thead>
@@ -246,7 +294,7 @@
     </table>
   </div>
 
-  <div class="section">
+  <div class="section" data-view-section="breakdown" data-breakdown-panel="models">
     <div class="section-header"><span>Models</span></div>
     <table id="models-table">
       <thead>
@@ -268,7 +316,7 @@
     </table>
   </div>
 
-  <div class="section">
+  <div class="section" data-view-section="breakdown" data-breakdown-panel="tools">
     <div class="section-header"><span>Tool Usage</span></div>
     <table id="tools-table">
       <thead>
@@ -285,7 +333,7 @@
     </table>
   </div>
 
-  <div class="section">
+  <div class="section" data-view-section="breakdown" data-breakdown-panel="projects">
     <div class="section-header"><span>Projects</span></div>
     <table id="projects-table">
       <thead>
@@ -305,7 +353,7 @@
     </table>
   </div>
 
-  <div class="section">
+  <div class="section" data-view-section="system">
     <div class="section-header"><span>Scanner</span></div>
     <table id="scan-table">
       <thead>
@@ -334,6 +382,7 @@
     came from.
   </footer>
 </div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script nonce="{{.Nonce}}">window.dashboardData = {{.PayloadJSON}};</script>
 <script nonce="{{.Nonce}}">window.filterState = {

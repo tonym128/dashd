@@ -596,6 +596,9 @@ function copyResumeCommand(btn) {
         const originalText = btn.textContent;
         btn.textContent = '✓';
         btn.style.color = 'var(--accent-green)';
+        if (typeof window !== 'undefined' && typeof window.showDashdToast === 'function') {
+            window.showDashdToast('Copied resume command to clipboard');
+        }
         setTimeout(() => {
             btn.textContent = originalText;
             btn.style.color = '';
@@ -1316,4 +1319,250 @@ updateSortIcons('tools-table', toolSort);
 
     readControlState();
     load();
+})();
+
+// ── UI Shell: views, theme, filter drawer, presets, chips, shortcuts ──
+(function() {
+    if (typeof document === 'undefined') return;
+
+    const toastEl = document.getElementById('toast');
+    let toastTimer = null;
+    function showToast(msg) {
+        if (!toastEl) return;
+        toastEl.textContent = msg;
+        toastEl.classList.add('is-visible');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toastEl.classList.remove('is-visible'), 2200);
+    }
+    if (typeof window !== 'undefined') {
+        window.showDashdToast = showToast;
+    }
+
+    // Theme toggle (dark default, light optional)
+    const themeBtn = document.getElementById('theme-toggle');
+    function applyTheme(theme) {
+        if (document.documentElement && document.documentElement.setAttribute) {
+            if (theme === 'light') {
+                document.documentElement.setAttribute('data-theme', 'light');
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+            }
+        }
+        if (themeBtn) {
+            themeBtn.textContent = theme === 'light' ? '☾' : '☀';
+            themeBtn.title = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+        }
+    }
+    let savedTheme = 'dark';
+    try {
+        savedTheme = localStorage.getItem('dashd:theme') || 'dark';
+    } catch (_) {}
+    applyTheme(savedTheme);
+    if (themeBtn && themeBtn.addEventListener) {
+        themeBtn.addEventListener('click', () => {
+            savedTheme = savedTheme === 'light' ? 'dark' : 'light';
+            try { localStorage.setItem('dashd:theme', savedTheme); } catch (_) {}
+            applyTheme(savedTheme);
+        });
+    }
+
+    // View tabs (overview, sessions, breakdown, system, all)
+    const viewTabsEl = document.getElementById('view-tabs');
+    const validViews = new Set(['overview', 'sessions', 'breakdown', 'system', 'all']);
+    function setActiveView(view) {
+        if (!validViews.has(view)) view = 'overview';
+        if (viewTabsEl && viewTabsEl.querySelectorAll) {
+            viewTabsEl.querySelectorAll('[data-view-tab]').forEach(tab => {
+                const active = tab.dataset.viewTab === view;
+                tab.classList.toggle('is-active', active);
+                tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+        }
+        if (document.querySelectorAll) {
+            document.querySelectorAll('[data-view-section]').forEach(sec => {
+                const targets = (sec.dataset.viewSection || '').split(/\s+/);
+                const visible = view === 'all' || targets.includes(view);
+                sec.classList.toggle('is-hidden', !visible);
+            });
+        }
+        try { localStorage.setItem('dashd:view', view); } catch (_) {}
+        if (typeof history !== 'undefined' && history.replaceState) {
+            history.replaceState(null, '', '#' + view);
+        }
+    }
+
+    let initialView = 'overview';
+    if (typeof location !== 'undefined' && location.hash) {
+        const h = location.hash.slice(1);
+        if (validViews.has(h)) initialView = h;
+    } else {
+        try {
+            const stored = localStorage.getItem('dashd:view');
+            if (stored && validViews.has(stored)) initialView = stored;
+        } catch (_) {}
+    }
+    setActiveView(initialView);
+
+    if (viewTabsEl && viewTabsEl.addEventListener) {
+        viewTabsEl.addEventListener('click', event => {
+            const tab = event.target.closest('[data-view-tab]');
+            if (tab) setActiveView(tab.dataset.viewTab);
+        });
+    }
+
+    // Breakdown sub-tabs (all, models, providers, projects, tools)
+    const breakdownTabsEl = document.getElementById('breakdown-tabs');
+    const validBreakdowns = new Set(['all', 'models', 'providers', 'projects', 'tools']);
+    function setActiveBreakdown(sub) {
+        if (!validBreakdowns.has(sub)) sub = 'all';
+        if (breakdownTabsEl && breakdownTabsEl.querySelectorAll) {
+            breakdownTabsEl.querySelectorAll('[data-breakdown-tab]').forEach(tab => {
+                const active = tab.dataset.breakdownTab === sub;
+                tab.classList.toggle('is-active', active);
+                tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+        }
+        if (document.querySelectorAll) {
+            document.querySelectorAll('[data-breakdown-panel]').forEach(panel => {
+                const visible = sub === 'all' || panel.dataset.breakdownPanel === sub;
+                panel.classList.toggle('is-hidden', !visible);
+            });
+        }
+        try { localStorage.setItem('dashd:breakdown', sub); } catch (_) {}
+    }
+    let initialBreakdown = 'all';
+    try {
+        const storedSub = localStorage.getItem('dashd:breakdown');
+        if (storedSub && validBreakdowns.has(storedSub)) initialBreakdown = storedSub;
+    } catch (_) {}
+    setActiveBreakdown(initialBreakdown);
+    if (breakdownTabsEl && breakdownTabsEl.addEventListener) {
+        breakdownTabsEl.addEventListener('click', event => {
+            const tab = event.target.closest('[data-breakdown-tab]');
+            if (tab) setActiveBreakdown(tab.dataset.breakdownTab);
+        });
+    }
+
+    // Filter drawer toggle
+    const filterToggle = document.getElementById('filter-toggle');
+    const filterPanel = document.getElementById('filter-panel');
+    if (filterToggle && filterPanel && filterToggle.addEventListener) {
+        filterToggle.addEventListener('click', () => {
+            const collapsed = filterPanel.classList.toggle('is-collapsed');
+            filterToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        });
+    }
+
+    // Active filter chips + badge
+    const chipsEl = document.getElementById('active-filter-chips');
+    const badgeEl = document.getElementById('filter-badge');
+    const params = typeof location !== 'undefined'
+        ? new URLSearchParams(location.search)
+        : new URLSearchParams();
+    const activeEntries = [];
+    [
+        ['model', 'Model'],
+        ['agent', 'Program'],
+        ['project', 'Project'],
+        ['date_from', 'From'],
+        ['date_to', 'To'],
+    ].forEach(([key, label]) => {
+        params.getAll(key).forEach(val => {
+            if (val) activeEntries.push({ key, label, val });
+        });
+    });
+
+    if (badgeEl) {
+        badgeEl.textContent = String(activeEntries.length);
+        badgeEl.hidden = activeEntries.length === 0;
+    }
+
+    if (chipsEl && activeEntries.length > 0) {
+        chipsEl.innerHTML = activeEntries.map(e =>
+            `<span class="filter-chip">${escapeHtml(e.label)}: <strong>${escapeHtml(e.val)}</strong>` +
+            `<button type="button" data-remove-filter-key="${escapeHtml(e.key)}" data-remove-filter-val="${escapeHtml(e.val)}" aria-label="Remove ${escapeHtml(e.label)} filter">&times;</button></span>`
+        ).join('') + '<a href="/" class="clear-link">Clear all</a>';
+
+        if (chipsEl.addEventListener) {
+            chipsEl.addEventListener('click', event => {
+                const btn = event.target.closest('[data-remove-filter-key]');
+                if (!btn) return;
+                const key = btn.dataset.removeFilterKey;
+                const val = btn.dataset.removeFilterVal;
+                const next = new URLSearchParams(location.search);
+                const kept = next.getAll(key).filter(v => v !== val);
+                next.delete(key);
+                kept.forEach(v => next.append(key, v));
+                const qs = next.toString();
+                location.href = qs ? '/?' + qs : '/';
+            });
+        }
+    }
+
+    // Quick date presets
+    function isoDate(d) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    }
+    const dateFromEl = document.getElementById('date_from');
+    const dateToEl = document.getElementById('date_to');
+    const filterForm = document.getElementById('filter-form');
+    if (document.querySelectorAll) {
+        const now = new Date();
+        const todayStr = isoDate(now);
+        const curFrom = params.get('date_from') || '';
+        const curTo = params.get('date_to') || '';
+        const d7 = new Date(now); d7.setDate(d7.getDate() - 6);
+        const d30 = new Date(now); d30.setDate(d30.getDate() - 29);
+
+        document.querySelectorAll('[data-date-preset]').forEach(btn => {
+            const p = btn.dataset.datePreset;
+            const isMatch =
+                (p === 'today' && curFrom === todayStr && curTo === todayStr) ||
+                (p === '7d' && curFrom === isoDate(d7) && curTo === todayStr) ||
+                (p === '30d' && curFrom === isoDate(d30) && curTo === todayStr) ||
+                (p === 'all' && !curFrom && !curTo);
+            btn.classList.toggle('is-active', isMatch);
+
+            btn.addEventListener('click', () => {
+                if (!dateFromEl || !dateToEl || !filterForm) return;
+                if (p === 'all') {
+                    dateFromEl.value = '';
+                    dateToEl.value = '';
+                } else {
+                    const start = new Date(now);
+                    if (p === '7d') start.setDate(start.getDate() - 6);
+                    if (p === '30d') start.setDate(start.getDate() - 29);
+                    dateFromEl.value = isoDate(start);
+                    dateToEl.value = todayStr;
+                }
+                filterForm.submit();
+            });
+        });
+    }
+
+    // Keyboard shortcuts: '/' focuses session search, 'r' refreshes, 'Esc' closes filter drawer
+    if (document.addEventListener) {
+        document.addEventListener('keydown', event => {
+            const tag = (event.target && event.target.tagName || '').toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+                if (event.key === 'Escape' && event.target.blur) event.target.blur();
+                return;
+            }
+            if (event.metaKey || event.ctrlKey || event.altKey) return;
+            if (event.key === '/') {
+                event.preventDefault();
+                setActiveView('sessions');
+                const search = document.getElementById('sessions-search');
+                if (search && search.focus) search.focus();
+            } else if (event.key === 'r') {
+                location.reload();
+            } else if (event.key === 'Escape' && filterPanel && !filterPanel.classList.contains('is-collapsed')) {
+                filterPanel.classList.add('is-collapsed');
+                if (filterToggle) filterToggle.setAttribute('aria-expanded', 'false');
+            }
+        });
+    }
 })();

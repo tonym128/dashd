@@ -1,5 +1,5 @@
 :root {
-    --font-sans: 'Aptos', 'Source Sans 3', Arial, sans-serif;
+    --font-sans: 'Aptos', 'Source Sans 3', system-ui, -apple-system, sans-serif;
     --font-mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
     --bg-primary: #0d1117;
     --bg-secondary: #161b22;
@@ -12,6 +12,24 @@
     --accent-yellow: #d29922;
     --accent-red: #f85149;
     --accent-purple: #a371f7;
+    --topbar-bg: rgba(13, 17, 23, 0.88);
+    --row-hover: rgba(88, 166, 255, 0.06);
+}
+
+:root[data-theme="light"] {
+    --bg-primary: #f6f8fa;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #eaeef2;
+    --border-color: #d0d7de;
+    --text-primary: #1f2328;
+    --text-secondary: #59636e;
+    --accent-blue: #0969da;
+    --accent-green: #1a7f37;
+    --accent-yellow: #9a6700;
+    --accent-red: #cf222e;
+    --accent-purple: #8250df;
+    --topbar-bg: rgba(246, 248, 250, 0.9);
+    --row-hover: rgba(9, 105, 218, 0.05);
 }
 
 * {
@@ -25,12 +43,13 @@ body {
     background: var(--bg-primary);
     color: var(--text-primary);
     line-height: 1.5;
-    padding: 20px;
+    padding: 0 0 40px;
 }
 
 .container {
     max-width: 1400px;
     margin: 0 auto;
+    padding: 20px;
 }
 
 h1 {
@@ -1178,4 +1197,350 @@ footer {
     margin: 0 0 24px;
     font-size: 12px;
     color: var(--text-secondary);
+}
+
+/* ── Sticky Topbar & Navigation ──────────────────────────────────────── */
+.topbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: var(--topbar-bg);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.topbar-inner {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.brand-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-primary);
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+}
+
+.brand-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--accent-green);
+    box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.2);
+}
+
+.topbar-divider {
+    color: var(--border-color);
+}
+
+.scan-status-pill {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 420px;
+}
+
+.topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.generated-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-right: 4px;
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-blue);
+}
+
+.btn-icon {
+    padding: 6px 10px;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.pill-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--accent-blue);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.page-header-row {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.page-header-row .subtitle {
+    margin-bottom: 0;
+}
+
+/* ── View Tabs & Sub-Tabs ────────────────────────────────────────────── */
+.view-tabs {
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    flex-wrap: wrap;
+}
+
+.view-tab {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.view-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
+.view-tab.is-active {
+    background: var(--accent-blue);
+    color: #fff;
+    font-weight: 600;
+}
+
+.sub-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.sub-tab {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sub-tab:hover {
+    color: var(--text-primary);
+    border-color: var(--accent-blue);
+}
+
+.sub-tab.is-active {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--accent-blue);
+}
+
+/* ── Filter Toolbar, Presets & Chips ─────────────────────────────────── */
+.filter-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.date-presets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.presets-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-right: 2px;
+}
+
+.preset-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.preset-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--accent-blue);
+}
+
+.preset-btn.is-active {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: #fff;
+}
+
+.active-filter-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.filter-chip button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.filter-chip button:hover {
+    color: var(--accent-red);
+}
+
+.filter-bar.is-collapsed {
+    display: none;
+}
+
+.filter-group .hint {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    opacity: 0.75;
+}
+
+.is-hidden {
+    display: none !important;
+}
+
+/* ── Tabular Numerals & Table Ergonomics ─────────────────────────────── */
+.numeric,
+.cost,
+.burn-value,
+.stat-card .value,
+.tokens {
+    font-variant-numeric: tabular-nums;
+}
+
+tbody tr:hover {
+    background: var(--row-hover);
+}
+
+/* ── Toast Notification ──────────────────────────────────────────────── */
+.toast {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 60;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--accent-green);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.toast.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* ── Responsive Adjustments ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .container {
+        padding: 12px;
+    }
+    .topbar-inner {
+        padding: 10px 12px;
+    }
+    .generated-meta,
+    .scan-status-pill {
+        display: none;
+    }
+    .token-card {
+        grid-column: span 1;
+    }
+    .burn-rate,
+    .stats-grid {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
 }
