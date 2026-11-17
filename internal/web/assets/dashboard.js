@@ -1435,7 +1435,7 @@ updateSortIcons('tools-table', toolSort);
 
     // View tabs (overview, sessions, breakdown, system, all)
     const viewTabsEl = document.getElementById('view-tabs');
-    const validViews = new Set(['overview', 'sessions', 'breakdown', 'system', 'all']);
+    const validViews = new Set(['overview', 'insights', 'sessions', 'breakdown', 'system', 'all']);
     function setActiveView(view) {
         if (!validViews.has(view)) view = 'overview';
         if (viewTabsEl && viewTabsEl.querySelectorAll) {
@@ -1474,6 +1474,12 @@ updateSortIcons('tools-table', toolSort);
         viewTabsEl.addEventListener('click', event => {
             const tab = event.target.closest('[data-view-tab]');
             if (tab) setActiveView(tab.dataset.viewTab);
+        });
+    }
+    if (document.addEventListener) {
+        document.addEventListener('click', event => {
+            const btn = event.target.closest('[data-open-view]');
+            if (btn) setActiveView(btn.dataset.openView);
         });
     }
 

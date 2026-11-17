@@ -37,6 +37,7 @@
       </div>
       <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Dashboard views">
         <button type="button" class="view-tab is-active" role="tab" aria-selected="true" data-view-tab="overview">Overview</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="insights">Insights{{if .Insights}} ({{len .Insights}}){{end}}</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="sessions">Sessions</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="breakdown">Breakdowns</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="system">System</button>
@@ -155,6 +156,55 @@
         {{range .Detail}}<div><span>{{.Label}}</span><strong>{{.Value}}</strong></div>{{end}}
       </div>
       {{end}}
+    </div>
+    {{end}}
+  </div>
+
+  {{if .TopInsights}}
+  <div class="section" data-view-section="overview">
+    <div class="section-header">
+      <span>Key Insights</span>
+      <button type="button" class="btn btn-secondary" data-open-view="insights">All {{len .Insights}} insights &rarr;</button>
+    </div>
+    <div class="insights-grid">
+      {{range .TopInsights}}
+      <div class="insight-card insight-{{.Severity}}">
+        <div class="insight-meta">
+          <span class="insight-category">{{.Category}}</span>
+          <span class="insight-sev">{{.Severity}}</span>
+        </div>
+        <div class="insight-headline">{{.Headline}}</div>
+        <p class="insight-detail">{{.Detail}}</p>
+        {{if .ActionURL}}<a class="insight-action" href="{{.ActionURL}}">{{.ActionLabel}} &rarr;</a>{{end}}
+      </div>
+      {{end}}
+    </div>
+  </div>
+  {{end}}
+
+  <div class="section" data-view-section="insights">
+    <div class="section-header">
+      <span>Usage Insights</span>
+      <span class="badge">{{len .Insights}} findings</span>
+    </div>
+    {{if .Insights}}
+    <div class="insights-grid">
+      {{range .Insights}}
+      <div class="insight-card insight-{{.Severity}}">
+        <div class="insight-meta">
+          <span class="insight-category">{{.Category}}</span>
+          <span class="insight-sev">{{.Severity}}</span>
+        </div>
+        <div class="insight-headline">{{.Headline}}</div>
+        <p class="insight-detail">{{.Detail}}</p>
+        {{if .ActionURL}}<a class="insight-action" href="{{.ActionURL}}">{{.ActionLabel}} &rarr;</a>{{end}}
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty-state">
+      <strong>No insights yet.</strong>
+      <span>Insights appear once enough calls and sessions are recorded in this view.</span>
     </div>
     {{end}}
   </div>

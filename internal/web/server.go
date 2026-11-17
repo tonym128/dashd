@@ -209,6 +209,8 @@ type pageData struct {
 	SourcesSummary    string
 	SourcesNeedAction bool
 	Machines          []machineStatusView
+	Insights          []Insight
+	TopInsights       []Insight
 }
 
 type machineStatusView struct {
@@ -249,6 +251,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	var projectTools []store.ProjectTool
 	var modelNames, agentNames, projectNames []string
 	var minTS, maxTS int64
+	var signals store.InsightSignals
 
 	// The page renders eleven rollups; each must observe the same database
 	// state, so they all run inside one read transaction. Under WAL this does
@@ -283,6 +286,10 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 			return err
 		}
 		modelNames, agentNames, projectNames, minTS, maxTS, err = st.Facets(ctx)
+		if err != nil {
+			return err
+		}
+		signals, err = st.InsightSignals(ctx, filter, totals)
 		return err
 	}); err != nil {
 		return pageData{}, err
@@ -329,6 +336,11 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	now := s.Generated()
 	burn := burnWindows(daily, now)
 	machineViews := s.machineStatusViews(ctx, now)
+	insights := BuildInsights(signals, totals, burn)
+	topInsights := insights
+	if len(topInsights) > 3 {
+		topInsights = topInsights[:3]
+	}
 	return pageData{
 		Generated:      now.Format("2006-01-02 15:04:05"),
 		StatCards:      statCards(totals),
@@ -342,6 +354,8 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		Sources:        sources,
 		SourcesSummary: sourceSummary(sources),
 		Machines:       machineViews,
+		Insights:       insights,
+		TopInsights:    topInsights,
 		// Shown whenever a local scan ran and a source needs attention, or when
 		// the database holds no calls at all (fresh install). A serve-only
 		// instance receiving remote pushes has no local scan_status rows and

@@ -209,6 +209,20 @@ func run(o options, command string, stdout io.Writer) error {
 
 	case "stats":
 		return printStats(st, stdout)
+
+	case "insights":
+		insights, err := web.BuildInsightsFromStore(ctx, st, store.Filter{}, time.Now())
+		if err != nil {
+			return err
+		}
+		if len(insights) == 0 {
+			fmt.Fprintln(stdout, "No insights yet.")
+			return nil
+		}
+		for _, in := range insights {
+			fmt.Fprintf(stdout, "[%-4s] %-17s %s\n       %s\n", strings.ToUpper(in.Severity), in.Category, in.Headline, in.Detail)
+		}
+		return nil
 	}
 
 	srv, err := web.New(st, log)

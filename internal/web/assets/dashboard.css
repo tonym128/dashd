@@ -1615,3 +1615,69 @@ body.compact-tables #machines-table td:nth-child(n+5):nth-child(-n+7) {
     max-width: 260px;
     white-space: pre-line;
 }
+
+/* ── Usage Insights ──────────────────────────────────────────────────── */
+.insights-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+    padding: 16px;
+}
+
+.insight-card {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--accent-blue);
+    border-radius: 8px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.insight-card.insight-warn { border-left-color: var(--accent-red); }
+.insight-card.insight-tip  { border-left-color: var(--accent-yellow); }
+.insight-card.insight-info { border-left-color: var(--accent-blue); }
+
+.insight-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+
+.insight-sev {
+    font-weight: 600;
+}
+
+.insight-warn .insight-sev { color: var(--accent-red); }
+.insight-tip  .insight-sev { color: var(--accent-yellow); }
+.insight-info .insight-sev { color: var(--accent-blue); }
+
+.insight-headline {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.insight-detail {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+}
+
+.insight-action {
+    margin-top: auto;
+    padding-top: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent-blue);
+    text-decoration: none;
+}
+
+.insight-action:hover {
+    text-decoration: underline;
+}
