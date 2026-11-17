@@ -10,7 +10,7 @@ Type=simple
 #   DASHD_REMOTE=https://dashd.example.com
 #   DASHD_AUTH_TOKEN=your-secret-token
 EnvironmentFile=%h/.config/dashd/push.env
-ExecStart=/usr/local/bin/dashd push -interval 30s -db %h/.local/share/dashd/push-state.db
+ExecStart=/usr/local/bin/dashd push -interval 30s -models %h/.local/share/dashd/models.json -models-refresh 24h -db %h/.local/share/dashd/push-state.db
 Restart=on-failure
 RestartSec=10
 

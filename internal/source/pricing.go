@@ -148,17 +148,49 @@ type openRouterDoc struct {
 }
 
 func (p *Pricer) loadOpenRouter(path string) error {
+	next, keys, err := parseOpenRouterFile(path)
+	if err != nil {
+		return err
+	}
+	if next == nil {
+		return nil
+	}
+	p.openRouter = next
+	p.liveKeys = keys
+	return nil
+}
+
+// ReloadOpenRouter atomically swaps the live OpenRouter catalogue from path
+// and clears the resolution cache so subsequent lookups see updated rates.
+func (p *Pricer) ReloadOpenRouter(path string) error {
+	next, keys, err := parseOpenRouterFile(path)
+	if err != nil {
+		return err
+	}
+	if next == nil {
+		return nil
+	}
+	p.mu.Lock()
+	p.openRouter = next
+	p.liveKeys = keys
+	p.cache = map[string]resolved{}
+	p.mu.Unlock()
+	return nil
+}
+
+func parseOpenRouterFile(path string) (map[string]Rates, []string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil, nil
 		}
-		return fmt.Errorf("read %s: %w", path, err)
+		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var doc openRouterDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
+		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	out := make(map[string]Rates, len(doc.Data))
 	for _, m := range doc.Data {
 		if m.ID == "" {
 			continue
@@ -176,17 +208,17 @@ func (p *Pricer) loadOpenRouter(path string) error {
 		key := NormalizeModel(m.ID)
 		// A zero-priced variant must not clobber a real entry for the same key:
 		// catalogues routinely list both "vendor/model" and "vendor/model:free".
-		if existing, ok := p.openRouter[key]; ok && entry.Input == 0 && entry.Output == 0 && existing.Input != 0 {
+		if existing, ok := out[key]; ok && entry.Input == 0 && entry.Output == 0 && existing.Input != 0 {
 			continue
 		}
-		p.openRouter[key] = entry
+		out[key] = entry
 	}
-	p.liveKeys = make([]string, 0, len(p.openRouter))
-	for k := range p.openRouter {
-		p.liveKeys = append(p.liveKeys, k)
+	keys := make([]string, 0, len(out))
+	for k := range out {
+		keys = append(keys, k)
 	}
-	sortLongestFirst(p.liveKeys)
-	return nil
+	sortLongestFirst(keys)
+	return out, keys, nil
 }
 
 // openRouterPrice is one price as the catalogue spells it: dollars per token,

@@ -30,6 +30,7 @@ go build -o dashd ./cmd/dashd
 | `scan` | One pass, then exit — for cron or a systemd timer |
 | `push` | Scan local logs and push updates to a remote `dashd` server |
 | `reprice` | Recompute every stored cost from the current price table |
+| `update-models` | Download the latest OpenRouter model pricing to `-models` |
 | `stats` | Print a summary of the database and the last scan of each source |
 
 ## Flags
@@ -45,6 +46,7 @@ go build -o dashd ./cmd/dashd
 | `-remote` | none | Remote `dashd` base URL for `push` (also `DASHD_REMOTE`) |
 | `-once` | off | For `push`, run one pass and exit instead of looping |
 | `-models` | next to the binary, one level above it, the working directory, or one level above that; else `./models.json` | OpenRouter price dump |
+| `-models-refresh` | `0` | Auto-update `models.json` from OpenRouter on this interval (e.g. `24h`) |
 | `-opencode` | inside `-home` | OpenCode database path |
 | `-verbose` | off | Log every request and scan detail |
 
@@ -150,16 +152,18 @@ The server exposes the web UI and `POST /api/ingest` on port `8753`, both protec
 
 ### 2. Run the push agent on each machine
 
-Prebuilt static binaries for **Linux** (`amd64`/`arm64`), **macOS** (`amd64`/`arm64`), and **Windows** (`amd64`) are published on the [Releases](https://github.com/tonym128/dashd/releases) page.
+Interactive installers download the latest release, prompt for your server URL, auth token, machine name, push interval, and `models.json` auto-update interval, and start the background service:
 
-- **Linux (`systemd --user`)**: copy [packaging/dashd-push.service](packaging/dashd-push.service) to `~/.config/systemd/user/`, configure `~/.config/dashd/push.env` (`DASHD_REMOTE` and `DASHD_AUTH_TOKEN`), then run `systemctl --user enable --now dashd-push`.
-- **macOS (`launchd`)**: edit [packaging/com.dashd.push.plist](packaging/com.dashd.push.plist), copy it to `~/Library/LaunchAgents/`, and run `launchctl load ~/Library/LaunchAgents/com.dashd.push.plist`.
-- **Windows (PowerShell / Task Scheduler)**:
-  ```powershell
-  $env:DASHD_REMOTE = "https://dashd.example.com"
-  $env:DASHD_AUTH_TOKEN = "your-token"
-  .\dashd.exe push -interval 30s -db "$env:USERPROFILE\.local\share\dashd\push-state.db"
+- **Linux & macOS**:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/tonym128/dashd/main/packaging/install.sh | bash
   ```
+- **Windows (PowerShell)**:
+  ```powershell
+  irm https://raw.githubusercontent.com/tonym128/dashd/main/packaging/install.ps1 | iex
+  ```
+
+Prebuilt static binaries for **Linux** (`amd64`/`arm64`), **macOS** (`amd64`/`arm64`), and **Windows** (`amd64`) are also available on the [Releases](https://github.com/tonym128/dashd/releases) page, and manual service templates are in [packaging/](packaging/).
 
 ## Security
 

@@ -26,19 +26,20 @@ const defaultCommand = "serve-and-scan"
 // commands is the complete set. It is a slice rather than inline cases in a
 // switch so that the same list can be printed in the error message and the
 // usage text, which is the only way those two stay in agreement.
-var commands = []string{"serve-and-scan", "serve", "scan", "push", "reprice", "stats"}
+var commands = []string{"serve-and-scan", "serve", "scan", "push", "reprice", "update-models", "stats"}
 
 // options is the parsed command line.
 type options struct {
-	db       string
-	addr     string
-	interval time.Duration
-	home     string
-	models   string
-	opencode string
-	machine  string
-	remote   string
-	once     bool
+	db            string
+	addr          string
+	interval      time.Duration
+	home          string
+	models        string
+	modelsRefresh time.Duration
+	opencode      string
+	machine       string
+	remote        string
+	once          bool
 	// authToken is empty unless -auth-token was given, which means "no
 	// authentication", not "authentication with an empty secret".
 	authToken string
@@ -62,6 +63,8 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 	fs.StringVar(&o.home, "home", home, "directory to look for agent logs under")
 	fs.StringVar(&o.models, "models", defaultModelsPath(),
 		"path to the OpenRouter models.json price dump")
+	fs.DurationVar(&o.modelsRefresh, "models-refresh", 0,
+		"auto-update models.json from OpenRouter on this interval (e.g. 24h); 0 disables")
 	fs.StringVar(&o.opencode, "opencode", "",
 		"path to the OpenCode database (default: inside -home)")
 	fs.StringVar(&o.machine, "machine", defaultHostname(),
@@ -161,6 +164,7 @@ Commands:
   scan            one scan pass, print totals, exit (for cron or a timer)
   push            scan local logs and push updates to a remote dashd server
   reprice         re-cost every stored call with the current price dump
+  update-models   download the latest OpenRouter model pricing to -models
   stats           print totals from the existing database, change nothing
 
 Flags:

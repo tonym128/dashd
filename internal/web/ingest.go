@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/tonym128/dashd/internal/model"
+	"github.com/tonym128/dashd/internal/source"
 )
 
 const maxIngestBytes = 32 << 20 // 32 MiB
@@ -73,8 +75,49 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	resp := map[string]any{
 		"ok":       true,
 		"ingested": ingested,
-	})
+	}
+	if etag := source.ModelsFileETag(s.ModelsPath); etag != "" {
+		resp["models_etag"] = etag
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleModels serves the server's current models.json so remote push clients
+// can stay in sync with the server's pricing table.
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.ModelsPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	etag := source.ModelsFileETag(s.ModelsPath)
+	if etag == "" {
+		http.NotFound(w, r)
+		return
+	}
+	quoted := `"` + etag + `"`
+	w.Header().Set("ETag", quoted)
+	w.Header().Set("Cache-Control", "no-cache")
+	if inm := strings.TrimSpace(r.Header.Get("If-None-Match")); inm == quoted || inm == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	data, err := os.ReadFile(s.ModelsPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	_, _ = w.Write(data)
 }

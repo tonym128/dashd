@@ -43,6 +43,9 @@ type Server struct {
 	// healthCacheTTL; zero queries the store on every request, which is what a
 	// test wants and what a network-exposed instance does not.
 	HealthCacheTTL time.Duration
+	// ModelsPath, when set, is served at GET /api/models and advertised via
+	// models_etag in /api/ingest responses so push clients stay in sync.
+	ModelsPath string
 
 	health healthCache
 }
@@ -68,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/assets/", s.handleAsset)
 	mux.HandleFunc("/api/activity", s.handleActivity)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
+	mux.HandleFunc("/api/models", s.handleModels)
 	mux.Handle("/session", http.HandlerFunc(s.handleSession))
 	// Outermost, so the headers are on every response the dashboard produces —
 	// including the assets, which is where a policy that only covered documents

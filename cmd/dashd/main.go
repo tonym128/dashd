@@ -83,6 +83,17 @@ func run(o options, command string, stdout io.Writer) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	log.Info("starting", "version", version, "commit", commit, "date", date, "command", command)
 
+	if command == "update-models" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		n, err := source.UpdateModels(ctx, source.OpenRouterModelsURL, o.models)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "updated %s (%d models)\n", o.models, n)
+		return nil
+	}
+
 	// The store reports a database it could not chmod 0600 through this hook,
 	// rather than failing: a filesystem without permission bits should not stop
 	// the dashboard, and a database any local account can read should not start
@@ -115,11 +126,14 @@ func run(o options, command string, stdout io.Writer) error {
 		openCodeDB = o.opencode
 	}
 	var sink scan.SessionSink = st
+	var rsink *remoteSink
 	if command == "push" {
 		if o.remote == "" {
 			return fmt.Errorf("-remote URL (or DASHD_REMOTE) is required for push")
 		}
-		sink = newRemoteSink(o.remote, o.authToken, o.machine)
+		rsink = newRemoteSink(o.remote, o.authToken, o.machine).withModelsSync(o.models, pricer, log)
+		rsink.SyncModels()
+		sink = rsink
 	}
 
 	scanner := scan.New(scan.Config{
@@ -155,6 +169,9 @@ func run(o options, command string, stdout io.Writer) error {
 			}
 			return err
 		}
+		if o.modelsRefresh > 0 {
+			go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, log)
+		}
 		log.Info("pushing continuously", "machine", o.machine, "remote", o.remote, "interval", o.interval)
 		scanner.Run(ctx, o.interval)
 		return nil
@@ -177,12 +194,16 @@ func run(o options, command string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	srv.ModelsPath = o.models
 	srv.ScanInfo = scanner.Status
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	if command == "serve-and-scan" {
+		if o.modelsRefresh > 0 {
+			go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, log)
+		}
 		var scannerDone sync.WaitGroup
 		scannerDone.Add(1)
 		go func() {
@@ -251,6 +272,38 @@ func run(o options, command string, stdout io.Writer) error {
 		log.Warn("graceful shutdown timed out", "error", err)
 	}
 	return nil
+}
+
+func runModelsRefresher(ctx context.Context, path string, interval time.Duration, pricer *source.Pricer, log *slog.Logger) {
+	refresh := func() {
+		rctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+		n, err := source.UpdateModels(rctx, source.OpenRouterModelsURL, path)
+		if err != nil {
+			log.Warn("auto-update models failed", "path", path, "error", err)
+			return
+		}
+		if err := pricer.ReloadOpenRouter(path); err != nil {
+			log.Warn("reload models failed", "path", path, "error", err)
+			return
+		}
+		log.Info("auto-updated models", "path", path, "models", n)
+	}
+
+	if st, err := os.Stat(path); err != nil || time.Since(st.ModTime()) >= interval {
+		refresh()
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
 }
 
 // waitFor blocks until the scanner has stopped, or stopTimeout passes.
