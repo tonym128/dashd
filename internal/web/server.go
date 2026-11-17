@@ -336,7 +336,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		FilterState:    parseFilterState(query),
 		Facets:         view,
 		Scan:           views,
-		ScanSummary:    scanSummary(views),
+		ScanSummary:    scanSummary(views, machineViews),
 		Burn:           burnCards(burn),
 		BurnNote:       burnNote(burn),
 		Sources:        sources,
@@ -395,8 +395,15 @@ func (s *Server) scanViews(ctx context.Context) ([]scanStatusView, error) {
 	return out, nil
 }
 
-func scanSummary(views []scanStatusView) string {
+func scanSummary(views []scanStatusView, machines []machineStatusView) string {
 	if len(views) == 0 {
+		if len(machines) > 0 {
+			noun := "machine"
+			if len(machines) != 1 {
+				noun = "machines"
+			}
+			return fmt.Sprintf("%d %s · last push %s", len(machines), noun, machines[0].LastSeenAgo)
+		}
 		return "no scan has run yet"
 	}
 	newest := views[0].LastScanAgo

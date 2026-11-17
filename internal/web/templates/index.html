@@ -415,7 +415,7 @@
           <td>{{if .Error}}<span class="scan-error">{{.Error}}</span>{{else}}ok{{end}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">The scanner has not run yet.</td></tr>
+        <tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">{{if .Machines}}Remote-only server &mdash; stats are pushed by connected machines above.{{else}}The scanner has not run yet.{{end}}</td></tr>
         {{end}}
       </tbody>
     </table>
