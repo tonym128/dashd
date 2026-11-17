@@ -1550,4 +1550,68 @@ tbody tr:hover {
         background: var(--bg-secondary);
         z-index: 1;
     }
+    .view-tabs,
+    .sub-tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        max-width: 100%;
+        scrollbar-width: none;
+    }
+    .view-tabs::-webkit-scrollbar,
+    .sub-tabs::-webkit-scrollbar {
+        display: none;
+    }
+    .view-tab,
+    .sub-tab {
+        white-space: nowrap;
+        flex: 0 0 auto;
+        min-height: 36px;
+    }
+    .preset-btn,
+    .btn,
+    .icon-btn {
+        min-height: 36px;
+    }
+    .table-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .table-search {
+        width: 100%;
+    }
+    .daily-label {
+        width: 82px;
+        font-size: 11px;
+    }
+    .daily-cost {
+        width: 60px;
+        font-size: 11px;
+    }
+}
+
+/* Compact columns mode: hide secondary token sub-columns on Providers/Models/Machines */
+body.compact-tables #providers-table th:nth-child(n+4):nth-child(-n+8),
+body.compact-tables #providers-table td:nth-child(n+4):nth-child(-n+8),
+body.compact-tables #models-table th:nth-child(n+4):nth-child(-n+8),
+body.compact-tables #models-table td:nth-child(n+4):nth-child(-n+8),
+body.compact-tables #machines-table th:nth-child(n+5):nth-child(-n+7),
+body.compact-tables #machines-table td:nth-child(n+5):nth-child(-n+7) {
+    display: none;
+}
+
+.chart-tooltip {
+    position: fixed;
+    z-index: 70;
+    pointer-events: none;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    max-width: 260px;
+    white-space: pre-line;
 }

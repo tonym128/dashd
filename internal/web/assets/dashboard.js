@@ -1686,4 +1686,70 @@ updateSortIcons('tools-table', toolSort);
                 .catch(() => {});
         }, 60000);
     }
+
+    // Compact table columns toggle (defaults to on for narrow mobile viewports)
+    const compactBtn = document.getElementById('compact-tables-toggle');
+    function setCompactTables(on) {
+        if (document.body && document.body.classList) {
+            document.body.classList.toggle('compact-tables', on);
+        }
+        if (compactBtn) {
+            compactBtn.classList.toggle('is-active', on);
+            compactBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        }
+    }
+    let compactOn = false;
+    try {
+        const storedCompact = localStorage.getItem('dashd:compact');
+        if (storedCompact !== null) {
+            compactOn = storedCompact === '1';
+        } else if (typeof window !== 'undefined' && window.innerWidth > 0 && window.innerWidth <= 640) {
+            compactOn = true;
+        }
+    } catch (_) {}
+    setCompactTables(compactOn);
+    if (compactBtn && compactBtn.addEventListener) {
+        compactBtn.addEventListener('click', () => {
+            compactOn = !compactOn;
+            try { localStorage.setItem('dashd:compact', compactOn ? '1' : '0'); } catch (_) {}
+            setCompactTables(compactOn);
+        });
+    }
+
+    // Touch- and hover-friendly chart tooltip for Daily Spending & Activity bars
+    const tipEl = document.getElementById('chart-tooltip');
+    if (tipEl && document.addEventListener) {
+        const showTip = (target, clientX, clientY) => {
+            const text = target && target.getAttribute ? target.getAttribute('title') : '';
+            if (!text) return;
+            tipEl.textContent = text;
+            tipEl.hidden = false;
+            const vw = (typeof window !== 'undefined' && window.innerWidth) || 375;
+            const x = Math.min(Math.max(10, clientX + 12), vw - 270);
+            const y = Math.max(10, clientY - 38);
+            tipEl.style.left = x + 'px';
+            tipEl.style.top = y + 'px';
+        };
+        const hideTip = () => { tipEl.hidden = true; };
+
+        ['daily-chart-content', 'activity-chart'].forEach(id => {
+            const host = document.getElementById(id);
+            if (!host || !host.addEventListener) return;
+            host.addEventListener('mouseover', e => {
+                const bar = e.target.closest('.bar-segment, .activity-bar, .activity-col');
+                if (bar) showTip(bar, e.clientX || 20, e.clientY || 80);
+            });
+            host.addEventListener('mousemove', e => {
+                if (tipEl.hidden) return;
+                const bar = e.target.closest('.bar-segment, .activity-bar, .activity-col');
+                if (bar) showTip(bar, e.clientX || 20, e.clientY || 80);
+            });
+            host.addEventListener('mouseout', hideTip);
+            host.addEventListener('pointerdown', e => {
+                const bar = e.target.closest('.bar-segment, .activity-bar, .activity-col');
+                if (bar) showTip(bar, e.clientX || 20, e.clientY || 80);
+                else hideTip();
+            });
+        });
+    }
 })();

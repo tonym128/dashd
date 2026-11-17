@@ -281,6 +281,7 @@
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="projects">Projects</button>
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="machines">Machines</button>
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="tools">Tools</button>
+    <button type="button" class="sub-tab" id="compact-tables-toggle" aria-pressed="false" title="Hide secondary token columns on narrow screens">Compact columns</button>
   </div>
 
   <div class="section" data-view-section="breakdown" data-breakdown-panel="providers">
@@ -437,6 +438,7 @@
   </footer>
 </div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
 
 <script nonce="{{.Nonce}}">window.dashboardData = {{.PayloadJSON}};</script>
 <script nonce="{{.Nonce}}">window.filterState = {
