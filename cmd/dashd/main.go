@@ -1,0 +1,399 @@
+// Command dashd serves the cost dashboard and keeps its database up to date.
+//
+// The two halves are deliberately separate. The scanner is a background loop that
+// owns writing; the web server only ever reads. SQLite runs in WAL mode, so a
+// page load gets a consistent snapshot while a scan is in progress and neither
+// half waits on the other. Either can also be run alone — `dashd scan` for a
+// cron-driven machine, `dashd serve` when the data is maintained elsewhere.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/tonym128/dashd/internal/model"
+	"github.com/tonym128/dashd/internal/scan"
+	"github.com/tonym128/dashd/internal/source"
+	"github.com/tonym128/dashd/internal/store"
+	"github.com/tonym128/dashd/internal/web"
+)
+
+// stopTimeout bounds how long shutdown waits for an in-flight scan pass to
+// notice the cancellation. Long enough for the pass that is nearly done, short
+// enough that ctrl-c still feels like ctrl-c.
+const stopTimeout = 30 * time.Second
+
+func main() {
+	os.Exit(runCLI(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// runCLI parses the command line, handles the two options that print and exit,
+// and otherwise runs the command. Kept separate from main so the exit code and
+// the streams are testable without starting a server.
+func runCLI(argv []string, stdout, stderr io.Writer) int {
+	o, command, err := parseArgs(argv)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		// `-h` is a request, not a failure.
+		printUsage(stderr)
+		return 0
+	case err != nil:
+		fmt.Fprintf(stderr, "dashd: %v\n\n", err)
+		printUsage(stderr)
+		return 2
+	}
+
+	if o.showVer {
+		fmt.Fprintln(stdout, versionString())
+		return 0
+	}
+
+	if err := run(o, command, stdout); err != nil {
+		fmt.Fprintln(stderr, "dashd:", err)
+		return 1
+	}
+	return 0
+}
+
+func run(o options, command string, stdout io.Writer) error {
+	level := slog.LevelInfo
+	if o.verbose {
+		level = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	log.Info("starting", "version", version, "commit", commit, "date", date, "command", command)
+
+	// The store reports a database it could not chmod 0600 through this hook,
+	// rather than failing: a filesystem without permission bits should not stop
+	// the dashboard, and a database any local account can read should not start
+	// silently. It is wired before Open, because that is when the chmod happens.
+	store.Warn = log.Warn
+
+	st, err := store.Open(o.db)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	// The pricer is built before the command switch on purpose: every command
+	// that costs anything needs it, so this is the single place the fallback
+	// warning can be — once per process, for scan, reprice, stats and serve.
+	pricer, err := source.NewPricer(o.models, "")
+	if err != nil {
+		return fmt.Errorf("%w\n\nPricing is required. Fetch it with:\n  "+
+			"python3 update_models.py", err)
+	}
+	warnIfFallbackOnly(pricer, o.models, log)
+
+	sources, openCodeDB := scan.DefaultSources(o.home)
+	// The flag wins over the location under -home. It used to be read here and
+	// then thrown away, so a user pointing -opencode at a database elsewhere —
+	// XDG_DATA_HOME, a second install, a copy kept for a colleague — scanned the
+	// default path instead and was shown an empty OpenCode panel with nothing to
+	// indicate that the database they named had never been opened.
+	if o.opencode != "" {
+		openCodeDB = o.opencode
+	}
+	scanner := scan.New(scan.Config{
+		Store:      st,
+		Pricer:     pricer,
+		Logger:     log,
+		Sources:    sources,
+		OpenCodeDB: openCodeDB,
+	})
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	switch command {
+	case "scan":
+		// One pass and out, for a machine that would rather be driven by cron
+		// or a systemd timer than by a resident process.
+		// The totals are printed even after a failed pass: the per-source
+		// lines are where the failure is named, and what did go in is real.
+		scanErr := scanner.RunOnce(ctx)
+		if err := printStats(st, stdout); err != nil {
+			return errors.Join(scanErr, err)
+		}
+		return scanErr
+
+	case "reprice":
+		n, err := st.Reprice(ctx, func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
+			return pricer.CostCall(m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
+		})
+		if err != nil {
+			return err
+		}
+		log.Info("repriced", "calls", n, "prices", o.models)
+		return printStats(st, stdout)
+
+	case "stats":
+		return printStats(st, stdout)
+	}
+
+	srv, err := web.New(st, log)
+	if err != nil {
+		return err
+	}
+	srv.ScanInfo = scanner.Status
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	if command == "serve-and-scan" {
+		var scannerDone sync.WaitGroup
+		scannerDone.Add(1)
+		go func() {
+			defer scannerDone.Done()
+			scanner.Run(ctx, o.interval)
+		}()
+		// Deferred after the store's Close above, so it runs *before* it on every
+		// exit path, including a listener that failed to bind. The scanner is the
+		// only writer, so it has to be stopped before the database goes away;
+		// otherwise a pass is part-way through its transaction when the
+		// connection closes under it.
+		defer func() { waitFor(&scannerDone, log) }()
+	}
+
+	logExposure(o, log)
+
+	httpSrv := &http.Server{
+		Addr: o.addr,
+		// Authentication is a wrapper rather than something the dashboard knows
+		// about, so this file decides policy and web/ stays a dashboard.
+		Handler: web.WithAuth(o.authToken, log, srv.Handler()),
+		// Generous, because a first render over a large history is genuinely
+		// slower than a static page but not unbounded.
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	ln, err := net.Listen("tcp", o.addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", o.addr, err)
+	}
+	log.Info("serving",
+		"url", "http://"+ln.Addr().String(),
+		"version", version,
+		"db", o.db,
+		"scanning", command == "serve-and-scan",
+		"auth", o.authToken != "",
+		"interval", o.interval,
+		"pid", os.Getpid())
+	log.Info("press ctrl-c to stop; -verbose for per-request detail")
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+	}
+
+	// Stop accepting requests, let in-flight ones finish, then close the
+	// database. Closing it first would fail whatever a request was still using.
+	// The scanner is stopped by the deferred wait below, after Shutdown returns
+	// and before the store closes.
+	// The scanner is stopped by the deferred wait above, after Shutdown returns
+	// and before the store closes.
+	log.Info("shutting down")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		log.Warn("graceful shutdown timed out", "error", err)
+	}
+	return nil
+}
+
+// waitFor blocks until the scanner has stopped, or stopTimeout passes.
+//
+// It is a timeout and not an unbounded wait because a scan pass reads every
+// transcript on the machine; on a cold home directory a stop could take a minute,
+// and a process that ignores ctrl-c is worse than one that exits having rolled
+// back. SQLite transactions are atomic, so a pass killed mid-flight leaves a
+// readable database and the next start re-reads the same files.
+func waitFor(wg *sync.WaitGroup, log *slog.Logger) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(stopTimeout):
+		log.Warn("scanner did not stop within the timeout; exiting mid-pass",
+			"timeout", stopTimeout)
+	}
+}
+
+// logExposure says plainly what the bind address implies. `dashd -addr 0.0.0.0`
+// on a cloud VM is a documented, and reasonable, thing for someone to do — which
+// is exactly why the unauthenticated case needs to be loud at startup rather
+// than discovered later.
+func logExposure(o options, log *slog.Logger) {
+	exposed := exposedToNetwork(o.addr)
+	switch {
+	case !exposed && o.authToken == "":
+		// Nothing to say. Localhost, no token: the normal case, and a warning
+		// here would train the operator to ignore warnings.
+	case exposed && o.authToken == "":
+		log.Warn("serving on a non-loopback address with NO authentication",
+			"addr", o.addr,
+			"exposes", "project paths, session titles, model names and per-session cost to anyone who can reach this port",
+			"reachable_from", "every interface on this host, including its public one",
+			"fix", "set -auth-token, or bind to 127.0.0.1 and reach it over an SSH tunnel")
+	case exposed && o.authToken != "":
+		log.Info("serving on a non-loopback address, protected by -auth-token",
+			"addr", o.addr, "accepts", "Authorization: Bearer, or X-Auth-Token",
+			"exempt", "/healthz")
+	default:
+		log.Info("authentication enabled", "accepts", "Authorization: Bearer, or X-Auth-Token",
+			"exempt", "/healthz")
+	}
+}
+
+// exposedToNetwork reports whether addr binds somewhere other than this machine.
+func exposedToNetwork(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Unparseable is not a reason to be reassuring.
+		return true
+	}
+	switch strings.ToLower(host) {
+	case "":
+		// ":8753" and "0.0.0.0:8753" both mean every interface.
+		return true
+	case "localhost":
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip == nil || !ip.IsLoopback()
+}
+
+// warnIfFallbackOnly reports the one degraded-but-working state: the OpenRouter
+// price dump did not load and every price is coming from the embedded table.
+//
+// This is not fatal, and deliberately so. The fallback table exists so that a
+// binary without a dump beside it still runs, and refusing to start would turn a
+// rough number into no number. It is also the reason this is loud: with the dump
+// absent, a model the fallback knows is priced correctly, but a model it does
+// not know is *unpriced* — and a stale row is worse than a missing one, because
+// a missing one is at least visible in the unpriced count. Silence here is how a
+// `$0.00` with `priced=1` reaches the dashboard.
+func warnIfFallbackOnly(pricer *source.Pricer, modelsPath string, log *slog.Logger) {
+	if !pricer.FallbackOnly() {
+		return
+	}
+	log.Warn("OpenRouter price dump not loaded; pricing accuracy is degraded",
+		"reason", "price dump missing or unreadable",
+		"models", modelsPath,
+		"priced_from", "embedded fallback table",
+		"fallback_models", pricer.FallbackSize(),
+		"live_models", 0,
+		"effect", "models absent from the fallback table are reported unpriced; "+
+			"fallback rows may be older than the provider's current rates",
+		"fix", "run `python3 update_models.py` in the dashd checkout, or pass -models /path/to/models.json",
+	)
+}
+
+// printStats reports the totals, including how many calls could not be priced at
+// all — the number that says the rate table is missing something.
+func printStats(st *store.Store, out io.Writer) error {
+	ctx := context.Background()
+	totals, err := st.Totals(ctx, store.Filter{})
+	if err != nil {
+		return err
+	}
+	statuses, _ := st.ScanStatuses()
+	fmt.Fprintf(out, "calls      %d\n", totals.Calls)
+	fmt.Fprintf(out, "sessions   %d\n", totals.Sessions)
+	fmt.Fprintf(out, "projects   %d\n", totals.Projects)
+	fmt.Fprintf(out, "tokens     %d\n", totals.TotalTokens)
+	fmt.Fprintf(out, "cost       $%.2f\n", totals.Cost)
+	if totals.UnpricedCalls > 0 {
+		fmt.Fprintf(out, "unpriced   %d calls (no rate found; run `update_models.py`)\n", totals.UnpricedCalls)
+	}
+	if totals.FirstTS > 0 {
+		oldest, newest, _ := st.HistoryRange(ctx, store.Filter{})
+		fmt.Fprintf(out, "history    %s to %s\n",
+			oldest.Local().Format("2006-01-02"), newest.Local().Format("2006-01-02"))
+	}
+	models, err := st.Models(ctx, store.Filter{})
+	if err == nil && len(models) > 0 {
+		providers := model.RollupProviders(models, totals.Cost)
+		if len(providers) > 0 {
+			fmt.Fprintln(out, "\nproviders:")
+			for _, p := range providers {
+				fmt.Fprintf(out, "  %-12s $%10.2f (%5.1f%%)  %7d calls\n",
+					p.Name, p.Cost, p.Pct, p.Calls)
+			}
+		}
+	}
+	fmt.Fprintln(out)
+	for _, s := range statuses {
+		state := "ok"
+		if s.Error != "" {
+			state = s.Error
+		}
+		fmt.Fprintf(out, "%-9s %6d files  %6d changed  %6d calls  %s\n",
+			s.Agent, s.FilesSeen, s.FilesChanged, s.CallsIngested, state)
+	}
+	return nil
+}
+
+// defaultModelsPath looks for the price dump next to the repository, which is
+// where it lives in a checkout, and under the data directory otherwise.
+func defaultModelsPath() string {
+	exe, _ := os.Executable()
+	wd, _ := os.Getwd()
+	return modelsPathFrom(exe, wd)
+}
+
+// modelsPathFrom is defaultModelsPath with the two environment lookups handed in,
+// so the search order can be tested against a real filesystem instead of
+// whatever directory the test binary happens to sit in.
+func modelsPathFrom(exePath, workDir string) string {
+	if exePath != "" {
+		// The binary sits beside models.json in a checkout, and one level above
+		// it when installed into ~/bin or /usr/local/bin.
+		dir := filepath.Dir(exePath)
+		for _, candidate := range []string{
+			filepath.Join(dir, "models.json"),
+			filepath.Join(filepath.Dir(dir), "models.json"),
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	if workDir != "" {
+		for _, candidate := range []string{
+			filepath.Join(workDir, "models.json"),
+			filepath.Join(workDir, "..", "models.json"),
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return "models.json"
+}

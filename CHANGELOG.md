@@ -1,0 +1,291 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.2.0] - 2026-10-19
+
+Every change here is a fix, but the database migrates one way: the first start
+takes it to schema version 5, and a 0.1.0 binary refuses to open it after that.
+Back up `dashboard.db` first if you might want to go back.
+
+Upgrading:
+
+- The migration drops Claude Code's scan cursors, so the first pass re-reads
+  every Claude log from the start. That is what rebuilds Claude calls under the
+  corrected keys; it is expected, and it happens once.
+- Stored costs are not recomputed on their own. Run `dashd reprice` after
+  upgrading, and again whenever you refresh `models.json`, to apply the pricing
+  fixes below to calls already in the database.
+
+### Fixed
+
+- **No OpenCode 2 session was ever ingested.** OpenCode 2 migrated its storage:
+  sessions moved from `session` to `session_v2` and messages from `message` to
+  `session_message`, with the role moved out of the JSON blob and into a column.
+  The migration *copies* rather than replaces, so an upgraded database holds both
+  generations at once — and `dashd` read only the old ones. It did not fail: the
+  old tables are still there and still full, so the pass reported a complete,
+  plausible, understated answer with nothing anywhere saying that every session
+  created since the upgrade was missing. On one real database that was 10
+  sessions, 1000 calls and 1124 tool calls absent. Sessions are now enumerated
+  from every session table present, messages are read from every message table
+  and deduplicated by id (the migration left messages behind in the old table as
+  well as copying them forward, so neither table alone is complete), the model is
+  read out of the object 2.x writes rather than the flat id 1.x wrote, and the
+  per-message model now wins over the session's, since 2.x records a model switch
+  as a message of its own.
+- **Every OpenCode 2 tool call was invisible.** A session 2 created keeps no rows
+  in the `part` table at all — its tool calls are entries in the message's own
+  content array — so the tool columns read empty for exactly the sessions the
+  model now counts. Tools are read from there when a message has no parts, and
+  from the parts when it has them, which is what stops a migrated session, whose
+  tool call is stored in both places, from being counted twice.
+- **`-opencode` was parsed and then discarded.** The flag's value was never
+  passed to the scanner, which was built from the default location under `-home`
+  instead. A user pointing it at a database elsewhere — `XDG_DATA_HOME`, a
+  second install — got an empty OpenCode panel and no indication that the file
+  they had named was never opened.
+- **An OpenCode tool row was overwritten by the next scan pass.** Tool calls were
+  keyed by their position in the batch, which restarts at zero on every
+  incremental pass, so each increment replaced the session's first tool row
+  rather than adding to it. A session still being worked on therefore reported
+  fewer tool calls and less tool time than it had made. They are keyed by the
+  part's own id, or by the message and call id for an inline tool call.
+- **Every OpenCode subagent session was dropped.** Child sessions were filtered
+  out on the belief that their messages were already in the parent's. They are
+  not: a subagent's messages are filed under its own session id, and neither the
+  parent's messages nor its totals include them. On one real database that was
+  3 of 10 sessions, including the largest — 489 calls and 23M cache-read tokens.
+  Child sessions are now ingested like any other.
+- **Claude Code calls were counted once per content block.** Claude Code writes
+  each block of a response — thinking, text, each tool call — as a line of its
+  own, every one repeating the response's full usage, and calls were keyed by
+  line. A real log of 83 responses stored 169 calls and roughly twice the true
+  tokens and cost. Calls are now keyed by the API message id, with the lines of
+  one response folded into one call. A schema step (v4) drops the stored Claude
+  scan cursors so each log is re-read once and its rows rebuilt.
+- **Every Claude Code tool call was stored twice.** The tool_use made one row and
+  its tool_result a second, unnamed `tool` row carrying the error flag, both
+  keyed by position in the batch. The result now completes its tool_use's row,
+  keyed by the tool_use id, which also gives Claude tool calls a duration. The
+  fixture that should have caught this had a tool_result line that was not
+  valid JSON, so it was never read.
+- **`models.json` refreshed**, so Claude 5 models are priced rather than reported
+  as unpriced.
+- **Claude Code's one-hour cache writes were billed at the five-minute rate.**
+  Anthropic charges a one-hour write at 2x input (1.25x for five minutes), and
+  every cache write Claude Code makes is the one-hour kind, so Claude cache
+  writes were under-billed by 37.5%. The one-hour share is now read from the
+  usage block, stored (schema step v5, which re-reads Claude logs to fill it)
+  and priced at 2x input, by the scan and by `dashd reprice` alike.
+- **Long-prompt price tiers were ignored.** Gemini Pro bills a prompt over 200K
+  tokens at higher rates, GPT over 272K, Haiku 5.5 over 100K; every call was
+  billed at the base rate. The tiers are read from the catalogue's `overrides`
+  and a call is priced at the tier its whole prompt (input plus cache) reaches.
+- **`gemini-3.8-flash` was priced 10% above Google's list price** through the
+  OpenRouter catalogue, and at a stale $0.50/$3.00 in the fallback table. A new
+  embedded `pricing_overrides.json` holds prices checked against the provider's
+  own list and takes precedence over the catalogue for the models it names; it
+  and the fallback table now carry Google's $0.75/$3.75. Google's rate doubles
+  on 2027-01-01, which this table does not yet model.
+- **A source whose files failed to ingest was reported as `ok`.** A file that
+  could not be read or stored was logged and skipped, and nothing else heard
+  about it: the source's status, the status page, the `dashd scan` summary and
+  the exit code all said the pass succeeded. After a schema change left a
+  column missing, every Claude write failed this way and the summary read
+  `claude ... 0 calls ok`. Failed files are still skipped and retried, so the
+  rest of the source goes in, but the pass now reports them — "N of M changed
+  files failed" with the first error — on the source's status and in the exit
+  code. `dashd scan` also prints its summary before exiting on a failure, since
+  the per-source lines are where the failure is named.
+- **The Copy button handed OpenCode users `opencode --session ''`.** An OpenCode
+  session has no transcript file, so the path the command was built from is
+  always empty; OpenCode resumes by session id, and that is what it is now given.
+
+## [0.1.0] - 2026-10-07
+
+The first release. Everything below was on `main` before this tag existed; the
+project had never been released, so this is the whole of its history.
+
+### Fixed
+
+- **A model-filtered page reported `0` tool seconds.** `toolSeconds` built its
+  clause with the call-table helper, emitting `model IN (...)` against
+  `tool_call` — a table with no `model` column — and discarded the resulting SQL
+  error into a confident `0`. The "Tool Time" card read `0s`, and because every
+  tool row's percentage divides by it, the whole tool table showed `0%` shares
+  against non-zero seconds on the same screen. This is the same defect class as
+  the `?model=` 500 fixed below, in the one call site that was missed; it now
+  uses the tool-table helper and returns the error instead of swallowing it.
+- **The session page double-escaped untrusted text.** `sessionView` and
+  `callViews` pre-escaped with `html.EscapeString` on top of `html/template`'s
+  own escaping, so a session title, project path or model name containing
+  `& < > " '` rendered as literal `&amp;amp;` on `/session`. The index page was
+  unaffected, which is why the escaping test did not catch it: it only requested
+  `/`.
+- **An incremental append could move a session out of its project bucket.** An
+  append resumes past the log's header record, which is where most agents carry
+  the working directory, so the parser reports no project. That empty value was
+  written over the stored one, so a growing pi, Codex or Gemini session drifted
+  into an empty project and split the per-project rollup across two rows. The
+  stored project is now recovered before writing, and an empty per-row project
+  falls back to it.
+- **An Antigravity step with no start timestamp was dated 1970-01-01.** The
+  timestamp was computed before the guard that checked for one, so a step
+  missing that field carried a real cost into a 1970 day bucket, which rendered
+  as a date row and a "January 1970" monthly total. Zero is the zero time here,
+  as it already was for every other parser.
+- **A date filter mis-bounded its end day across a DST transition.** The upper
+  bound was computed as midnight plus an absolute 24 hours less a second, which
+  over-included the first hour of the next day on the spring-forward and
+  silently dropped the last hour of the named day on the fall-back. It is
+  calendar arithmetic now, and the test pins both transitions.
+- **`/healthz` could not stall behind a scan, and neither could a page load see
+  a torn database.** Two related fixes to the claim the package makes about WAL:
+  `Scanner.Status` took the same mutex a whole pass holds, so the health probe
+  blocked for the pass's duration; and the index handler issued eleven separate
+  queries with no transaction, so its payload could describe two different
+  databases when a scan committed mid-render. `Status` now reads the pass state
+  under its own lock, and the page's rollups all run inside one read
+  transaction, which WAL serves without blocking the writer.
+- **The orphaned-session state never reached the page.** The mechanism worked —
+  a session whose log has been rotated away is flagged, its figures kept — but
+  neither the sessions payload nor the session view emitted the flag, so every
+  row offered a transcript link that cannot open and the explanation never
+  rendered. The documented behaviour is what the page now does.
+- **`dashd scan` exited 0 when every source failed.** Per-source errors were
+  recorded for the UI and then discarded, so a cron job or a systemd
+  `Type=oneshot` timer reported success after ingesting nothing — invisible to
+  exactly the supervisors the split `scan`/`serve` deployment depends on. Source
+  failures are now joined into the returned error while every source still runs.
+- **`maxLineBytes` capped nothing.** The limit was checked after the reader had
+  already grown its buffer to hold the whole line, so a corrupt log with no
+  newline was read into memory in full before being rejected — and rejected
+  permanently, since the cursor never advanced. The reader now enforces the cap
+  as it accumulates. The split function is a deliberate near-copy of
+  `bufio.ScanLines`: the default emits a trailing line that has no terminating
+  newline, which is the half-written final record an agent writes live, and
+  consuming it would treat a truncated fragment as complete.
+- **Accessibility.** `role="button"` on a sortable `<th>` overwrote its implicit
+  `columnheader` role, which cost every table on the page its column headers to
+  a screen reader and made the `aria-sort` on the same element invalid; the sort
+  control is a real button inside the heading now. The project drill-down row
+  was click-only, so its entire model and tool breakdown was unreachable by
+  keyboard; it is focusable, `Enter`/`Space` operable, and announces its state
+  through `aria-expanded`. Numeric columns were right-aligned only in the
+  activity table, leaving roughly forty columns of figures left-aligned; the
+  copy button's hover state measured 2.14:1 contrast. The session page's stat
+  cards used class names the stylesheet defines nowhere, and three colour
+  classes the template emits were undefined, so those cards rendered unstyled.
+- **The first release would not have published its container image.** The release
+  job granted `contents: write` and documented a GHCR push that needs `packages:
+  write`, which was never granted: binaries and the GitHub Release would have
+  been published, then the image push would have failed with a 403, leaving a
+  half-published tag that the workflow is configured not to retry. The release
+  footer also advertised a `docker run` line that reached nothing and mounted
+  the wrong volume path — undoing the container security default the changelog
+  records as fixed.
+- The coverage floor sat at 45% against a measured 82.8%, with a comment block
+  stale by 35–45 points and its own instruction to raise it unheeded. It is 80%
+  now, and the numbers in the comment match reality.
+- **Windows was never tested successfully, and the failures hid each other.**
+  The `windows-latest` job had been red for the whole life of CI, and each
+  defect stopped the job before the next could be seen. Four, in order:
+  - Without a `.gitattributes` the Windows runner checked the tree out as CRLF
+    and `gofmt` reported all 66 files as unformatted — a repository-wide
+    formatting failure that was never one. The working tree is now pinned to LF;
+    no stored file changed.
+  - PowerShell's native argument passing split
+    `-coverprofile=coverage.out` into a bare `.out`, which `go test` tried to
+    import as a package. The step now runs under bash, as the formatting step
+    already did.
+  - `TestDefaultSourcesHonoursTheHomeArgument` compared a `/home/tester` prefix
+    against roots `filepath.Join` spells with backslashes. It is about roots
+    sitting under the given home, not about which separator spells it.
+  - Two Gemini tests faked a home directory by setting `HOME` alone, which
+    `os.UserHomeDir` does not read on Windows. **The product code was already
+    correct**; the harness was resolving the real profile, finding no
+    `.project_root`, and falling back to the project directory name. A shared
+    `setFakeHome` now sets both variables.
+- The Windows-only permissions test now skips there rather than failing.
+  Windows has no Unix permission bits — every file reports `0666` whatever was
+  requested, because access is governed by ACLs — so `os.Chmod` succeeds and
+  changes nothing. Protecting the database on Windows rests on the profile
+  directory's ACL, which is outside this code.
+
+### Added
+
+- A test that serves page loads from a real HTTP server while the scanner commits,
+  which is the only one that can check the claim justifying the process split.
+- An auth-wiring test that puts the middleware around the actual server mux rather
+  than a stub, so a route registered outside the wrapper is caught — `run()`, the
+  one place auth is applied, had no coverage at all.
+- CI now runs each fuzz target on a budget, so the parsers are exercised by inputs
+  the committed corpus does not contain; `govulncheck` and dependency updates; a
+  container build on every PR, which catches a `.dockerignore` regression that
+  would otherwise drop the price dump and silently report `$0.00` at release time.
+- A regression test for each defect above that was previously invisible: the
+  `/session` escaping, the model-filtered tool seconds, the retained project
+  across an append, the undated Antigravity step, and the DST date bound.
+- Release binaries for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and
+  windows/amd64. The build matrix had been excluding Intel Macs while the
+  comment justifying it described 32-bit Macs, which were not in the matrix at
+  all — so the contradiction shipped as a silent gap for a large share of
+  developers.
+
+### Changed
+
+- Ten data and money defects, each with a reproduction: `Reprice` dropped
+  reasoning tokens (a 12% under-report); a resumed Codex scan dropped its first
+  increment; a reported-zero Codex delta fell through to differencing and
+  charged 38k cache tokens to a single call; pi and Gemini never billed
+  reasoning; zero-token calls were stored with `priced=true`; `TotalTokens`
+  excluded reasoning, understating throughput by about 3.8%; `?model=` returned
+  HTTP 500; a protobuf field number was truncated; an OpenCode tool part was
+  lost; and the database was created world-readable.
+- **XSS.** `escapeHtml` in `dashboard.js` round-tripped its argument through
+  `textContent`→`innerHTML` and escaped neither quote, so a crafted agent log
+  closed a `title=` attribute and injected a live `onmouseover=` handler —
+  reproduced in headless Chromium. The escaper now escapes `& < > " '` and the
+  backtick by table lookup with no DOM involved, and the inline handlers it
+  depended on are gone: every clickable cell is a `data-` attribute read by one
+  delegated listener.
+- No security headers were sent. Responses now carry `X-Content-Type-Options`,
+  `X-Frame-Options`, `Referrer-Policy` and a Content-Security-Policy whose inline
+  scripts carry a per-response nonce. The one relaxation is `style-src`, which
+  keeps `'unsafe-inline'` because the page writes style attributes.
+- The resume command was assembled with double quotes, so a working directory
+  containing `"` closed the argument and made the rest a second command. Each
+  value is now single-quoted for `sh`.
+- The container defaulted to `-addr 0.0.0.0:8753`, so `docker run -p 8753:8753`
+  published every project path, session title and cost figure on the network
+  with no authentication. The default is now loopback, as the binary's already
+  was; publishing takes an explicit bind and a token, together.
+- An incremental OpenCode read was committed with `ReplaceSession`, so a
+  resumed pass deleted the rows it did not re-read. It appends once a session
+  has a non-zero stored cursor, which is the rule the file sources already
+  followed.
+- `parseInt64` had no overflow guard, so `"9223372036854775808"` wrapped to
+  `MinInt64` with no error. A wrapped epoch is still a plausible date, so the
+  corruption survived into the report.
+- `geminiProjectForPath` read `os.Getenv("HOME")`, which is empty on Windows: the
+  lookup produced a CWD-relative path that no installation has, and every Gemini
+  session filed itself under its directory name rather than its working
+  directory. It now uses `os.UserHomeDir()`.
+- `store.Warn`, the hook that reports a database it could not chmod `0600`, was
+  never wired up, so the CLI's own logger was bypassed.
+- The web source panel duplicated the scanner's six log paths. Both now come
+  from `scan.HomeRelativeRoots`, so a hint cannot point somewhere the scanner
+  never looked.
+- `filterState.Active` was computed and read by nothing. It is now rendered as a
+  "Filtered" note beside the Clear link.
+- The `go.mod` module path said `tonym128/agent-cost-dashboard`, which did not
+  match the git remote, so `go install` and any `go get` of this module failed.
+  Corrected to `github.com/tonym128/agent-cost-dashboard`.
+- The `LICENSE` named Duncan Ogilvie, the author of the `modernc.org/sqlite`
+  dependency, rather than the author of this project.

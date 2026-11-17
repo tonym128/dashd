@@ -1,0 +1,180 @@
+# GoReleaser configuration for dashd.
+#
+# One source of truth: this file produces both the GitHub Release artifacts and
+# the ghcr.io container image, driven by the same tag. See release.yml.
+#
+# Validated against GoReleaser v2.18.2 (`goreleaser check`).
+
+version: 2
+
+project_name: dashd
+
+before:
+  hooks:
+    # sanity: nothing to do, the module is self-contained and vendored-free.
+    # `go mod download` keeps the build hermetic and makes a network failure
+    # loud here rather than halfway through five cross builds.
+    - go mod download
+
+builds:
+  - id: dashd
+    main: ./cmd/dashd
+    # CGO off: modernc.org/sqlite is a pure-Go SQLite, so the result is a
+    # statically linked binary that runs on distroless/alpine/scratch alike.
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    goarm: []
+    ignore:
+      # windows/arm64 has no meaningful users for a self-hosted dashboard, and
+      # 32-bit arm is long dead. Intel Macs (darwin/amd64) ARE built: this list
+      # used to exclude them while the comment above it talked about darwin/386,
+      # which this goarch list does not even contain — so the two contradicted
+      # each other, and the effect was that a large share of developers had no
+      # binary to download.
+      - goos: windows
+        goarch: arm64
+      - goarm: "6"
+    # Reproducible: the mtime of every file in the archive is the commit
+    # timestamp, so building the same commit twice yields identical bytes.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+    # NOTE: there is deliberately no `signs:` block here. Release signing and
+    # macOS notarization are out of scope for a personal tool. When they are
+    # wanted, add under this build:
+    #
+    #   signs:
+    #     - cmd: cosign
+    #       certificate: '${ artifact }.pem'
+    #       args: ["sign-blob", "--output-certificate", "${ certificate }",
+    #              "--output-signature", "${ signature }", "${ artifact }"]
+    #       artifacts: checksum
+    #
+    # and a top-level `notarize:` block (goreleaser docs: customization/notarize).
+
+archives:
+  - id: default
+    ids:
+      - dashd
+    # tar.gz everywhere except Windows, which gets zip.
+    formats: ["tar.gz"]
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+    # One directory per archive so extracting never litters the cwd.
+    wrap_in_directory: true
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      # The price dump ships with every release. Without it the binary starts
+      # happily and reports $0.00 costs while claiming it priced them, which is
+      # the worst possible failure for a cost tool.
+      - src: models.json
+        dst: models.json
+      - src: README.md
+        dst: README.md
+      - src: LICENSE
+        dst: LICENSE
+      # models.json sits beside the extracted binary inside the wrapped
+      # directory, which is the first place defaultModelsPath() looks, so the
+      # binary prices correctly with no -models flag.
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      # Noise that is not interesting in a release note for a small tool.
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^typos:"
+      - "^Merge pull request"
+      - "^Merge branch"
+
+# Multi-arch image. dockers_v2 replaced dockers + docker_manifests in GoReleaser
+# v2.12: a single `docker buildx build` produces every architecture and the
+# manifest list in one operation, so there is no second push step to keep in
+# sync and no external manifest action to pin. Platforms are restricted to
+# linux/* because the image is built from a Linux Dockerfile; darwin and windows
+# binaries are release artifacts only.
+dockers_v2:
+  - id: dashd
+    dockerfile: Dockerfile
+    # dockers_v2 builds the image from a staging directory holding only the
+    # release artifacts, not from the repository root. The Dockerfile compiles
+    # from source, so without these the build fails with
+    #   failed to calculate checksum of ref ...: "/go.sum": not found
+    # after the binaries and archives have already been produced — which is the
+    # worst place to discover it, because the release is half-published by then.
+    # Found by `gh workflow run release.yml`, not by CI: the container job
+    # builds from the repository root, where none of this is needed, so no
+    # pull request could ever have caught it.
+    #
+    # Directory entries, not globs: extra_files does not expand `cmd/**`, and
+    # the error is a literal "lstat cmd/**: no such file or directory".
+    #
+    # GoReleaser advises against this and suggests copying the pre-built binary
+    # instead (`COPY $TARGETPLATFORM/dashd`). That is the better shape — it
+    # would put the exact checksummed binary in the image rather than a second
+    # compilation — but it needs the Dockerfile to stop building from source,
+    # which is also what the container job tests. Keeping one Dockerfile that is
+    # exercised by CI on every push is worth the extra build step for now.
+    extra_files:
+      - go.mod
+      - go.sum
+      - cmd
+      - internal
+      - models.json
+    images:
+      - ghcr.io/tonym128/dashd
+    tags:
+      - "latest"
+      - "{{ .Version }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    # multiarch is implied by >1 platform; stated for the reader.
+    build_args:
+      VERSION: "{{ .Version }}"
+      COMMIT: "{{ .FullCommit }}"
+      DATE: "{{ .CommitDate }}"
+    labels:
+      org.opencontainers.image.title: dashd
+      org.opencontainers.image.description: >-
+        Self-hosted dashboard of what your coding agents actually cost.
+      org.opencontainers.image.source: >-
+        https://github.com/tonym128/dashd
+      org.opencontainers.image.licenses: MIT
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Installing
+
+    Download the archive for your platform, extract it, and run `./dashd`.
+    `models.json` is in the archive and must stay next to the binary or one
+    directory above it, or pass `-models /path/to/models.json`.
+
+    Container: the image binds loopback by default, so publishing takes both a
+    non-loopback bind and a token — see the README's container section for the
+    verified invocation. Volume is `/var/lib/dashd`, not `/data`.
+
+  # NOTE: signing the release artifacts and notarizing the macOS binaries would
+  # go here, as top-level `signs:` (see the note on the build above).
