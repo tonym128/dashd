@@ -45,12 +45,25 @@ type Source struct {
 	parserFor func() source.Parser
 }
 
+// SessionSink receives parsed sessions from a scan pass. *store.Store
+// satisfies this interface for local scans; remote push clients implement it
+// to ship parsed sessions over HTTP while keeping cursors in a local Store.
+type SessionSink interface {
+	ReplaceSession(sess model.SessionWrite) error
+	AppendSession(sess model.SessionWrite) error
+	RecomputeSession(uid string) error
+}
+
 // Config configures a Scanner.
 type Config struct {
 	Store   *store.Store
+	Sink    SessionSink
 	Pricer  *source.Pricer
 	Logger  *slog.Logger
 	Sources []Source
+	// Machine names the host these logs come from. When set, every ingested
+	// session, call, and tool call is tagged with this machine name.
+	Machine string
 
 	// OpenCodeDB, when set, adds OpenCode as a source. It is handled separately
 	// because every session lives in one shared database: the unit of work is a
@@ -82,6 +95,9 @@ type Scanner struct {
 func New(cfg Config) *Scanner {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.Sink == nil && cfg.Store != nil {
+		cfg.Sink = cfg.Store
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -316,18 +332,21 @@ func (s *Scanner) ingest(path string, prev model.ScanState, parser source.Parser
 		return 0, nil
 	}
 
+	if s.cfg.Machine != "" && sess.Machine == "" {
+		sess.Machine = s.cfg.Machine
+	}
 	incremental := next.Offset > prev.Offset && prev.Offset > 0 && same
 	if incremental {
-		err = s.cfg.Store.AppendSession(sess)
+		err = s.cfg.Sink.AppendSession(sess)
 	} else {
-		err = s.cfg.Store.ReplaceSession(sess)
+		err = s.cfg.Sink.ReplaceSession(sess)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("store %s: %w", path, err)
 	}
 	// The summary is rebuilt from the rows either way, which is what keeps an
 	// append from leaving a stale total behind.
-	if err := s.cfg.Store.RecomputeSession(sess.UID); err != nil {
+	if err := s.cfg.Sink.RecomputeSession(sess.UID); err != nil {
 		return 0, fmt.Errorf("summarise %s: %w", sess.UID, err)
 	}
 
@@ -402,14 +421,17 @@ func (s *Scanner) scanOpenCode(ctx context.Context, states map[string]model.Scan
 		// cursor, which saw the whole session — may be committed as a
 		// replacement. This is the same append-versus-replace rule ingest()
 		// applies to the file sources, from the same evidence.
-		commit := s.cfg.Store.AppendSession
+		if s.cfg.Machine != "" && sess.Machine == "" {
+			sess.Machine = s.cfg.Machine
+		}
+		commit := s.cfg.Sink.AppendSession
 		if prev[id].Offset == 0 {
-			commit = s.cfg.Store.ReplaceSession
+			commit = s.cfg.Sink.ReplaceSession
 		}
 		if err := commit(sess); err != nil {
 			return seen, changed, ingested, err
 		}
-		if err := s.cfg.Store.RecomputeSession(sess.UID); err != nil {
+		if err := s.cfg.Sink.RecomputeSession(sess.UID); err != nil {
 			return seen, changed, ingested, err
 		}
 		state.Scanned = s.cfg.Now()

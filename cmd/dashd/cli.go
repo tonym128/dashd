@@ -26,7 +26,7 @@ const defaultCommand = "serve-and-scan"
 // commands is the complete set. It is a slice rather than inline cases in a
 // switch so that the same list can be printed in the error message and the
 // usage text, which is the only way those two stay in agreement.
-var commands = []string{"serve-and-scan", "serve", "scan", "reprice", "stats"}
+var commands = []string{"serve-and-scan", "serve", "scan", "push", "reprice", "stats"}
 
 // options is the parsed command line.
 type options struct {
@@ -36,6 +36,9 @@ type options struct {
 	home     string
 	models   string
 	opencode string
+	machine  string
+	remote   string
+	once     bool
 	// authToken is empty unless -auth-token was given, which means "no
 	// authentication", not "authentication with an empty secret".
 	authToken string
@@ -61,8 +64,14 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 		"path to the OpenRouter models.json price dump")
 	fs.StringVar(&o.opencode, "opencode", "",
 		"path to the OpenCode database (default: inside -home)")
+	fs.StringVar(&o.machine, "machine", defaultHostname(),
+		"machine name attached to scanned sessions and calls")
+	fs.StringVar(&o.remote, "remote", "",
+		"remote dashd base URL for 'push' (e.g. https://dashd.example.com; also DASHD_REMOTE)")
+	fs.BoolVar(&o.once, "once", false,
+		"for 'push', run a single pass and exit instead of looping on -interval")
 	fs.StringVar(&o.authToken, "auth-token", "",
-		"require this bearer token (Authorization: Bearer, or X-Auth-Token); empty disables authentication")
+		"require/send this bearer token (also DASHD_AUTH_TOKEN); empty disables authentication")
 	fs.BoolVar(&o.verbose, "verbose", false, "log every request and scan detail")
 	fs.BoolVar(&o.showVer, "version", false, "print the version, commit and build date, then exit")
 	return fs
@@ -125,6 +134,14 @@ func parseArgs(argv []string) (options, string, error) {
 	return o, command, nil
 }
 
+func defaultHostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
 // printUsage writes the commands and the real flag set.
 func printUsage(out io.Writer) {
 	var o options
@@ -142,6 +159,7 @@ Commands:
   serve-and-scan  serve the dashboard and scan on an interval (default)
   serve           serve the dashboard only; data is maintained elsewhere
   scan            one scan pass, print totals, exit (for cron or a timer)
+  push            scan local logs and push updates to a remote dashd server
   reprice         re-cost every stored call with the current price dump
   stats           print totals from the existing database, change nothing
 

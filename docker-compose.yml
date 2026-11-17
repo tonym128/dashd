@@ -1,0 +1,23 @@
+services:
+  dashd:
+    build: .
+    image: ghcr.io/tonym128/dashd:latest
+    container_name: dashd-server
+    restart: unless-stopped
+    ports:
+      - "8753:8753"
+    environment:
+      DASHD_AUTH_TOKEN: "${DASHD_AUTH_TOKEN:?Set DASHD_AUTH_TOKEN in .env or shell}"
+    volumes:
+      - dashd-data:/var/lib/dashd
+    command:
+      - serve
+      - -addr
+      - 0.0.0.0:8753
+      - -models
+      - /usr/local/lib/dashd/models.json
+      - -db
+      - /var/lib/dashd/dashboard.db
+
+volumes:
+  dashd-data:

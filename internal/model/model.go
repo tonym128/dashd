@@ -31,6 +31,7 @@ type Call struct {
 	SessionUID string
 	Agent      string
 	Project    string
+	Machine    string
 	Model      string
 	CallKey    string
 
@@ -70,6 +71,7 @@ type ToolCall struct {
 	SessionUID string
 	Agent      string
 	Project    string
+	Machine    string
 	Tool       string
 	CallKey    string
 	Time       time.Time
@@ -85,6 +87,7 @@ type Session struct {
 	UID     string
 	Agent   string
 	Project string
+	Machine string
 	Path    string
 	Title   string
 
@@ -187,3 +190,15 @@ const (
 
 // CursorPrefixBytes is how much of a file's head is fingerprinted.
 const CursorPrefixBytes = 4096
+
+// IngestSession is one parsed session shipped to a remote dashd server.
+type IngestSession struct {
+	Mode    string       `json:"mode"` // "replace" or "append"
+	Session SessionWrite `json:"session"`
+}
+
+// IngestRequest is the payload accepted by POST /api/ingest.
+type IngestRequest struct {
+	Machine  string          `json:"machine"`
+	Sessions []IngestSession `json:"sessions"`
+}

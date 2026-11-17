@@ -26,8 +26,9 @@ go build -o dashd ./cmd/dashd
 | Command | What it does |
 |---|---|
 | `serve-and-scan` | Serve the dashboard and scan on a timer (default) |
-| `serve` | Serve only; the database is maintained elsewhere |
+| `serve` | Serve only; the database is maintained elsewhere (or receives `dashd push`) |
 | `scan` | One pass, then exit — for cron or a systemd timer |
+| `push` | Scan local logs and push updates to a remote `dashd` server |
 | `reprice` | Recompute every stored cost from the current price table |
 | `stats` | Print a summary of the database and the last scan of each source |
 
@@ -35,11 +36,14 @@ go build -o dashd ./cmd/dashd
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-db` | `~/.local/share/dashd/dashboard.db` | Database path |
+| `-db` | `~/.local/share/dashd/dashboard.db` | Database path (also stores local cursors for `push`) |
 | `-addr` | `127.0.0.1:8753` | Listen address; `0.0.0.0` exposes it to the network |
-| `-auth-token` | none | Require `Authorization: Bearer <token>`; use it if you expose the dashboard |
-| `-interval` | `30s` | How often to scan |
+| `-auth-token` | none | Require/send bearer token (also `DASHD_AUTH_TOKEN`) |
+| `-interval` | `30s` | How often to scan or push |
 | `-home` | `$HOME` | Where to look for agent logs |
+| `-machine` | hostname | Machine name attached to scanned sessions and calls |
+| `-remote` | none | Remote `dashd` base URL for `push` (also `DASHD_REMOTE`) |
+| `-once` | off | For `push`, run one pass and exit instead of looping |
 | `-models` | next to the binary, one level above it, the working directory, or one level above that; else `./models.json` | OpenRouter price dump |
 | `-opencode` | inside `-home` | OpenCode database path |
 | `-verbose` | off | Log every request and scan detail |
@@ -128,6 +132,34 @@ docker run -d -p 127.0.0.1:8753:8753 \
 ```
 
 Note that the container UID must match your local user to read `0700` agent directories, and the named volume must be owned by that UID.
+
+## Remote server & multi-machine push
+
+You can run `dashd` as a central server (for example in Docker) and push incremental logs from your **Linux**, **macOS**, and **Windows** machines. Each pushed session and call records the originating machine name (`-machine`, defaulting to the host's hostname), and the dashboard lets you filter and search by machine.
+
+### 1. Start the remote server (Docker)
+
+Use [docker-compose.yml](docker-compose.yml) (or `Dockerfile` directly):
+
+```bash
+export DASHD_AUTH_TOKEN="$(openssl rand -hex 32)"
+docker compose up -d
+```
+
+The server exposes the web UI and `POST /api/ingest` on port `8753`, both protected by `DASHD_AUTH_TOKEN`.
+
+### 2. Run the push agent on each machine
+
+Prebuilt static binaries for **Linux** (`amd64`/`arm64`), **macOS** (`amd64`/`arm64`), and **Windows** (`amd64`) are published on the [Releases](https://github.com/tonym128/dashd/releases) page.
+
+- **Linux (`systemd --user`)**: copy [packaging/dashd-push.service](packaging/dashd-push.service) to `~/.config/systemd/user/`, configure `~/.config/dashd/push.env` (`DASHD_REMOTE` and `DASHD_AUTH_TOKEN`), then run `systemctl --user enable --now dashd-push`.
+- **macOS (`launchd`)**: edit [packaging/com.dashd.push.plist](packaging/com.dashd.push.plist), copy it to `~/Library/LaunchAgents/`, and run `launchctl load ~/Library/LaunchAgents/com.dashd.push.plist`.
+- **Windows (PowerShell / Task Scheduler)**:
+  ```powershell
+  $env:DASHD_REMOTE = "https://dashd.example.com"
+  $env:DASHD_AUTH_TOKEN = "your-token"
+  .\dashd.exe push -interval 30s -db "$env:USERPROFILE\.local\share\dashd\push-state.db"
+  ```
 
 ## Security
 

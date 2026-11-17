@@ -18,6 +18,7 @@ type Filter struct {
 	Models   []string
 	Agents   []string
 	Projects []string
+	Machines []string
 	DateFrom *time.Time
 	DateTo   *time.Time
 }
@@ -59,6 +60,12 @@ func (f Filter) whereExtra(colPrefix, tsCol string, bounds ...string) (string, [
 		clauses = append(clauses, p("project")+" IN ("+inPlaceholders(len(f.Projects))+")")
 		for _, pr := range f.Projects {
 			args = append(args, pr)
+		}
+	}
+	if len(f.Machines) > 0 {
+		clauses = append(clauses, p("machine")+" IN ("+inPlaceholders(len(f.Machines))+")")
+		for _, mc := range f.Machines {
+			args = append(args, mc)
 		}
 	}
 	// A record with no timestamp is excluded from a date window rather than
@@ -141,6 +148,12 @@ func (f Filter) whereToolCall(colPrefix string) (string, []any) {
 			args = append(args, pr)
 		}
 	}
+	if len(f.Machines) > 0 {
+		clauses = append(clauses, p("machine")+" IN ("+inPlaceholders(len(f.Machines))+")")
+		for _, mc := range f.Machines {
+			args = append(args, mc)
+		}
+	}
 	if f.DateFrom != nil {
 		clauses = append(clauses, p("ts")+" >= ? AND "+p("ts")+" > 0")
 		args = append(args, f.DateFrom.Unix())
@@ -191,6 +204,12 @@ func (f Filter) whereSession(colPrefix string) (string, []any) {
 		clauses = append(clauses, p("project")+" IN ("+inPlaceholders(len(f.Projects))+")")
 		for _, pr := range f.Projects {
 			args = append(args, pr)
+		}
+	}
+	if len(f.Machines) > 0 {
+		clauses = append(clauses, p("machine")+" IN ("+inPlaceholders(len(f.Machines))+")")
+		for _, mc := range f.Machines {
+			args = append(args, mc)
 		}
 	}
 	if f.DateFrom != nil {
@@ -565,6 +584,7 @@ type SessionRow struct {
 	UID              string
 	Agent            string
 	Project          string
+	Machine          string
 	Path             string
 	Title            string
 	FirstTS          int64
@@ -594,7 +614,7 @@ type SessionRow struct {
 // statements that produce a session row and the web layer renders all 22 fields
 // of one: a column added to only one of them is a page that quietly shows a
 // zero, and nothing else would notice.
-const sessionColumns = `uid, agent, project, path, title, first_ts, last_ts,
+const sessionColumns = `uid, agent, project, machine, path, title, first_ts, last_ts,
 	wall_seconds, calls, input_tokens, output_tokens,
 	cache_read_tokens, cache_write_tokens, reasoning_tokens,
 	total_tokens, cost_usd, llm_seconds, tool_seconds,
@@ -604,7 +624,7 @@ const sessionColumns = `uid, agent, project, path, title, first_ts, last_ts,
 func scanSessionRow(rows *sql.Rows) (SessionRow, error) {
 	var r SessionRow
 	var orphaned int
-	if err := rows.Scan(&r.UID, &r.Agent, &r.Project, &r.Path, &r.Title,
+	if err := rows.Scan(&r.UID, &r.Agent, &r.Project, &r.Machine, &r.Path, &r.Title,
 		&r.FirstTS, &r.LastTS, &r.WallSeconds, &r.Calls, &r.InputTokens,
 		&r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens,
 		&r.ReasoningTokens, &r.TotalTokens, &r.Cost, &r.LLMSeconds,
@@ -712,6 +732,25 @@ func (s *Store) Facets(ctx context.Context) (models, agents, projects []string, 
 		return nil, nil, nil, 0, 0, err
 	}
 	return models, agents, projects, nullMin.Int64, nullMax.Int64, nil
+}
+
+// Machines returns every distinct non-empty machine name recorded in calls.
+func (s *Store) Machines(ctx context.Context) ([]string, error) {
+	rows, err := s.q.QueryContext(ctx,
+		"SELECT DISTINCT machine FROM call WHERE machine != '' ORDER BY machine")
+	if err != nil {
+		return nil, fmt.Errorf("machines: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // Reprice recomputes cost for every stored call from the current price table.

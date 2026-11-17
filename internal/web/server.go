@@ -67,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/assets/", s.handleAsset)
 	mux.HandleFunc("/api/activity", s.handleActivity)
+	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.Handle("/session", http.HandlerFunc(s.handleSession))
 	// Outermost, so the headers are on every response the dashboard produces —
 	// including the assets, which is where a policy that only covered documents
@@ -207,6 +208,7 @@ type facets struct {
 	Models   []string
 	Agents   []string
 	Projects []string
+	Machines []string
 	MinDate  string
 	MaxDate  string
 }
@@ -291,7 +293,11 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		return pageData{}, fmt.Errorf("encode payload: %w", err)
 	}
 
-	view := facets{Models: modelNames, Agents: agentNames, Projects: projectNames}
+	machineNames, err := s.store.Machines(ctx)
+	if err != nil {
+		return pageData{}, err
+	}
+	view := facets{Models: modelNames, Agents: agentNames, Projects: projectNames, Machines: machineNames}
 	if minTS > 0 {
 		view.MinDate = time.Unix(minTS, 0).Local().Format("2006-01-02")
 	}
@@ -409,6 +415,7 @@ type filterState struct {
 	Models   []string
 	Agents   []string
 	Projects []string
+	Machines []string
 	DateFrom string
 	DateTo   string
 	Active   bool
@@ -430,16 +437,19 @@ func parseFilter(q url.Values) (store.Filter, filterState, error) {
 		Models:   multi("model"),
 		Agents:   multi("agent"),
 		Projects: multi("project"),
+		Machines: multi("machine"),
 		DateFrom: q.Get("date_from"),
 		DateTo:   q.Get("date_to"),
 	}
 	state.Active = len(state.Models) > 0 || len(state.Agents) > 0 ||
-		len(state.Projects) > 0 || state.DateFrom != "" || state.DateTo != ""
+		len(state.Projects) > 0 || len(state.Machines) > 0 ||
+		state.DateFrom != "" || state.DateTo != ""
 
 	filter := store.Filter{
 		Models:   state.Models,
 		Agents:   state.Agents,
 		Projects: state.Projects,
+		Machines: state.Machines,
 	}
 
 	// A date is interpreted in the reader's own timezone, and a "to" date

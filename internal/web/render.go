@@ -321,6 +321,7 @@ func sessionsJSON(sessions []store.SessionRow) []map[string]any {
 			"uid":                s.UID,
 			"agent_cmd":          s.Agent,
 			"cwd":                s.Project,
+			"machine":            s.Machine,
 			"path":               s.Path,
 			"title":              s.Title,
 			"messages":           s.Calls,

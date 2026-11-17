@@ -1,0 +1,18 @@
+[Unit]
+Description=dashd remote log pusher
+Documentation=https://github.com/tonym128/dashd
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Set DASHD_REMOTE and DASHD_AUTH_TOKEN in ~/.config/dashd/push.env:
+#   DASHD_REMOTE=https://dashd.example.com
+#   DASHD_AUTH_TOKEN=your-secret-token
+EnvironmentFile=%h/.config/dashd/push.env
+ExecStart=/usr/local/bin/dashd push -interval 30s -db %h/.local/share/dashd/push-state.db
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

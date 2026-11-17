@@ -530,7 +530,7 @@ function renderSessions() {
 
     const matches = s => {
         if (!query) return true;
-        return [s.cwd, s.path, s.agent_cmd, s.title]
+        return [s.cwd, s.path, s.agent_cmd, s.title, s.machine]
             .some(v => String(v || '').toLowerCase().includes(query));
     };
     const visibleSessions = sortedSessions.filter(matches);
@@ -563,9 +563,11 @@ function renderSessions() {
         const sessionName = displayNameFromPath(s.cwd);
         const shortProject = sessionName.length > 40 ? sessionName.slice(0, 37) + '...' : sessionName;
 
+        const machineBadge = s.machine ? ` <span class="badge" title="Machine">${escapeHtml(s.machine)}</span>` : '';
+
         html += `
             <tr>
-                <td class="project-name" title="${escapeHtml(s.cwd)}">${escapeHtml(shortProject)}</td>
+                <td class="project-name" title="${escapeHtml(s.cwd)}">${escapeHtml(shortProject)}${machineBadge}</td>
                 <td style="color: var(--text-secondary)">${s.start_display}</td>
                 <td style="color: var(--text-secondary)">${s.duration_display}</td>
                 <td style="color: var(--accent-purple)">${s.llm_time_display}</td>
@@ -1464,6 +1466,7 @@ updateSortIcons('tools-table', toolSort);
         ['model', 'Model'],
         ['agent', 'Program'],
         ['project', 'Project'],
+        ['machine', 'Machine'],
         ['date_from', 'From'],
         ['date_to', 'To'],
     ].forEach(([key, label]) => {

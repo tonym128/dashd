@@ -79,6 +79,12 @@
           {{range .Facets.Projects}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </div>
+      <div class="filter-group">
+        <label for="machine">Machine</label>
+        <select name="machine" id="machine" multiple size="5">
+          {{range .Facets.Machines}}<option value="{{.}}">{{.}}</option>{{end}}
+        </select>
+      </div>
       <div class="filter-group filter-dates">
         <label for="date_from">Date from</label>
         <input type="date" name="date_from" id="date_from" min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}">
@@ -388,7 +394,8 @@
 <script nonce="{{.Nonce}}">window.filterState = {
   models: {{jsonList .FilterState.Models}},
   agents: {{jsonList .FilterState.Agents}},
-  projects: {{jsonList .FilterState.Projects}}
+  projects: {{jsonList .FilterState.Projects}},
+  machines: {{jsonList .FilterState.Machines}}
 };</script>
 <script src="/assets/dashboard.js"></script>
 <script nonce="{{.Nonce}}">
@@ -405,9 +412,11 @@
   var m = document.getElementById('model');
   var a = document.getElementById('agent');
   var p = document.getElementById('project');
+  var mc = document.getElementById('machine');
   if (m) mark(m, s.models);
   if (a) mark(a, s.agents);
   if (p) mark(p, s.projects);
+  if (mc && s.machines) mark(mc, s.machines);
   if (q.get('date_from')) document.getElementById('date_from').value = q.get('date_from');
   if (q.get('date_to')) document.getElementById('date_to').value = q.get('date_to');
 })();

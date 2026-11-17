@@ -406,6 +406,7 @@ var migrations = []migration{
 	v3DropPrefixIndexes,
 	v4ResetClaude,
 	v5CacheWrite1h,
+	v6Machine,
 }
 
 // execScript turns a multi-statement script into a migration step.
@@ -581,8 +582,8 @@ func (s *Store) ReplaceSession(sess model.SessionWrite) error {
 		// an UPDATE against a row that was never inserted silently does
 		// nothing, and the session then vanishes from every table.
 		_, err := tx.Exec(`
-			INSERT INTO session (uid, agent, project, path, title) VALUES (?,?,?,?,?)`,
-			sess.UID, sess.Agent, sess.Project, sess.Path, sess.Title)
+			INSERT INTO session (uid, agent, project, machine, path, title) VALUES (?,?,?,?,?,?)`,
+			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path, sess.Title)
 		return err
 	})
 }
@@ -602,17 +603,22 @@ func (s *Store) AppendSession(sess model.SessionWrite) error {
 		// before writing, otherwise both the session row and the new call rows
 		// would land in an empty project bucket and split the per-project
 		// rollup. See rowProject.
-		if sess.Project == "" {
-			var known string
+		if sess.Project == "" || sess.Machine == "" {
+			var knownProj, knownMach string
 			err := tx.QueryRow(
-				`SELECT project FROM session WHERE uid = ?`, sess.UID).Scan(&known)
+				`SELECT project, machine FROM session WHERE uid = ?`, sess.UID).Scan(&knownProj, &knownMach)
 			switch {
 			case err == nil:
-				sess.Project = known
+				if sess.Project == "" {
+					sess.Project = knownProj
+				}
+				if sess.Machine == "" {
+					sess.Machine = knownMach
+				}
 			case errors.Is(err, sql.ErrNoRows):
 				// First write for this uid; nothing to inherit.
 			default:
-				return fmt.Errorf("read stored project for %s: %w", sess.UID, err)
+				return fmt.Errorf("read stored session metadata for %s: %w", sess.UID, err)
 			}
 		}
 		if err := insertSessionRows(tx, sess); err != nil {
@@ -623,11 +629,13 @@ func (s *Store) AppendSession(sess model.SessionWrite) error {
 		// this pass actually knows one, so an append that learned nothing about
 		// it cannot erase it.
 		_, err := tx.Exec(
-			`INSERT INTO session (uid, agent, project, path) VALUES (?,?,?,?)
+			`INSERT INTO session (uid, agent, project, machine, path) VALUES (?,?,?,?,?)
 			 ON CONFLICT(uid) DO UPDATE SET
 				project = CASE WHEN excluded.project = '' THEN session.project
-				               ELSE excluded.project END`,
-			sess.UID, sess.Agent, sess.Project, sess.Path)
+				               ELSE excluded.project END,
+				machine = CASE WHEN excluded.machine = '' THEN session.machine
+				               ELSE excluded.machine END`,
+			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path)
 		return err
 	})
 }
@@ -662,12 +670,13 @@ func rowProject(sessionProject, rowProject string) string {
 
 func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 	callStmt, err := tx.Prepare(`
-		INSERT INTO call (session_uid, call_key, agent, project, model, ts, day,
+		INSERT INTO call (session_uid, call_key, agent, project, machine, model, ts, day,
 		                  input_tokens, output_tokens, cache_read_tokens,
 		                  cache_write_tokens, cache_write_1h_tokens, reasoning_tokens,
 		                  total_tokens, llm_seconds, cost_usd, priced)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(session_uid, call_key) DO UPDATE SET
+			machine = CASE WHEN excluded.machine = '' THEN call.machine ELSE excluded.machine END,
 			model = excluded.model, ts = excluded.ts, day = excluded.day,
 			input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
 			cache_read_tokens = excluded.cache_read_tokens,
@@ -691,7 +700,7 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 			day = c.Time.Local().Format("2006-01-02")
 		}
 		if _, err := callStmt.Exec(
-			c.SessionUID, c.CallKey, c.Agent, rowProject(sess.Project, c.Project), c.Model, ts, day,
+			c.SessionUID, c.CallKey, c.Agent, rowProject(sess.Project, c.Project), rowProject(sess.Machine, c.Machine), c.Model, ts, day,
 			c.InputTokens, c.OutputTokens, c.CacheReadTokens, c.CacheWriteTokens,
 			c.CacheWrite1hTokens, c.ReasoningTokens, c.TotalTokens, c.LLMSeconds, c.CostUSD, boolInt(c.Priced),
 		); err != nil {
@@ -701,9 +710,10 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 
 	if len(sess.ToolCalls) > 0 {
 		toolStmt, err := tx.Prepare(`
-			INSERT INTO tool_call (session_uid, call_key, agent, project, tool, ts, seconds, is_error)
-			VALUES (?,?,?,?,?,?,?,?)
+			INSERT INTO tool_call (session_uid, call_key, agent, project, machine, tool, ts, seconds, is_error)
+			VALUES (?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(session_uid, call_key) DO UPDATE SET
+				machine = CASE WHEN excluded.machine = '' THEN tool_call.machine ELSE excluded.machine END,
 				-- An empty name is a tool result whose tool_use an earlier pass
 				-- stored; it completes that row and keeps its name.
 				tool = CASE WHEN excluded.tool = '' THEN tool_call.tool ELSE excluded.tool END,
@@ -719,7 +729,7 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 				ts = t.Time.Unix()
 			}
 			if _, err := toolStmt.Exec(
-				t.SessionUID, t.CallKey, t.Agent, rowProject(sess.Project, t.Project), t.Tool, ts, t.Seconds, boolInt(t.IsError),
+				t.SessionUID, t.CallKey, t.Agent, rowProject(sess.Project, t.Project), rowProject(sess.Machine, t.Machine), t.Tool, ts, t.Seconds, boolInt(t.IsError),
 			); err != nil {
 				return fmt.Errorf("insert tool call %s/%s: %w", t.SessionUID, t.CallKey, err)
 			}

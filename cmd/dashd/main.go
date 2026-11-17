@@ -69,6 +69,13 @@ func runCLI(argv []string, stdout, stderr io.Writer) int {
 }
 
 func run(o options, command string, stdout io.Writer) error {
+	if o.authToken == "" {
+		o.authToken = os.Getenv("DASHD_AUTH_TOKEN")
+	}
+	if o.remote == "" {
+		o.remote = os.Getenv("DASHD_REMOTE")
+	}
+
 	level := slog.LevelInfo
 	if o.verbose {
 		level = slog.LevelDebug
@@ -107,11 +114,21 @@ func run(o options, command string, stdout io.Writer) error {
 	if o.opencode != "" {
 		openCodeDB = o.opencode
 	}
+	var sink scan.SessionSink = st
+	if command == "push" {
+		if o.remote == "" {
+			return fmt.Errorf("-remote URL (or DASHD_REMOTE) is required for push")
+		}
+		sink = newRemoteSink(o.remote, o.authToken, o.machine)
+	}
+
 	scanner := scan.New(scan.Config{
 		Store:      st,
+		Sink:       sink,
 		Pricer:     pricer,
 		Logger:     log,
 		Sources:    sources,
+		Machine:    o.machine,
 		OpenCodeDB: openCodeDB,
 	})
 
@@ -129,6 +146,18 @@ func run(o options, command string, stdout io.Writer) error {
 			return errors.Join(scanErr, err)
 		}
 		return scanErr
+
+	case "push":
+		if o.once || o.interval <= 0 {
+			err := scanner.RunOnce(ctx)
+			if err == nil {
+				fmt.Fprintf(stdout, "pushed %s to %s\n", o.machine, o.remote)
+			}
+			return err
+		}
+		log.Info("pushing continuously", "machine", o.machine, "remote", o.remote, "interval", o.interval)
+		scanner.Run(ctx, o.interval)
+		return nil
 
 	case "reprice":
 		n, err := st.Reprice(ctx, func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
