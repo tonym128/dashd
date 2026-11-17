@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tonym128/dashd/internal/model"
@@ -47,7 +48,8 @@ type Server struct {
 	// models_etag in /api/ingest responses so push clients stay in sync.
 	ModelsPath string
 
-	health healthCache
+	health   healthCache
+	ingestMu sync.Mutex
 }
 
 // New builds a Server.
@@ -206,6 +208,14 @@ type pageData struct {
 	Sources           []sourceView
 	SourcesSummary    string
 	SourcesNeedAction bool
+	Machines          []machineStatusView
+}
+
+type machineStatusView struct {
+	Machine        string
+	LastSeenAgo    string
+	SessionsPushed int
+	CallsPushed    int
 }
 
 type facets struct {
@@ -232,6 +242,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	var daily []store.DayBucket
 	var models []store.ModelStat
 	var projects []store.ProjectStat
+	var machines []store.MachineStat
 	var tools []store.ToolStat
 	var sessions []store.SessionRow
 	var projectModels []store.ProjectModel
@@ -254,6 +265,9 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 			return err
 		}
 		if projects, err = st.Projects(ctx, filter); err != nil {
+			return err
+		}
+		if machines, err = st.MachinesBreakdown(ctx, filter); err != nil {
 			return err
 		}
 		if tools, err = st.Tools(ctx, filter); err != nil {
@@ -283,6 +297,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		"models":         modelsJSON(models, totals.Cost),
 		"providers":      providersJSON(provStats),
 		"projects":       projectsJSON(projects, sessions, projectModels, projectTools),
+		"machines":       machinesJSON(machines, totals.Cost),
 		"tools":          toolsJSON(tools, totals.ToolSeconds),
 		"unpricedCalls":  totals.UnpricedCalls,
 		"firstActivity":  totals.FirstTS,
@@ -313,6 +328,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	sources := sourceViews(views)
 	now := s.Generated()
 	burn := burnWindows(daily, now)
+	machineViews := s.machineStatusViews(ctx, now)
 	return pageData{
 		Generated:      now.Format("2006-01-02 15:04:05"),
 		StatCards:      statCards(totals),
@@ -325,11 +341,34 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		BurnNote:       burnNote(burn),
 		Sources:        sources,
 		SourcesSummary: sourceSummary(sources),
-		// Shown whenever a source needs attention, and also when the database
-		// holds no calls at all: on a fresh install that panel is the only
-		// thing on the page explaining why every figure is zero.
-		SourcesNeedAction: anyNeedsAttention(sources) || totals.Calls == 0,
+		Machines:       machineViews,
+		// Shown whenever a local scan ran and a source needs attention, or when
+		// the database holds no calls at all (fresh install). A serve-only
+		// instance receiving remote pushes has no local scan_status rows and
+		// already has calls, so it should not warn about missing local logs.
+		SourcesNeedAction: (len(views) > 0 && anyNeedsAttention(sources)) || totals.Calls == 0,
 	}, nil
+}
+
+func (s *Server) machineStatusViews(ctx context.Context, now time.Time) []machineStatusView {
+	rows, err := s.store.MachineStatuses(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]machineStatusView, 0, len(rows))
+	for _, r := range rows {
+		ago := "never"
+		if r.LastSeenAt > 0 {
+			ago = humanAge(now.Sub(time.Unix(r.LastSeenAt, 0)))
+		}
+		out = append(out, machineStatusView{
+			Machine:        r.Machine,
+			LastSeenAgo:    ago,
+			SessionsPushed: r.SessionsPushed,
+			CallsPushed:    r.CallsPushed,
+		})
+	}
+	return out
 }
 
 func (s *Server) scanViews(ctx context.Context) ([]scanStatusView, error) {

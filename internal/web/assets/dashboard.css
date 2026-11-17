@@ -1543,4 +1543,11 @@ tbody tr:hover {
     .stats-grid {
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     }
+    table th:first-child,
+    table td:first-child {
+        position: sticky;
+        left: 0;
+        background: var(--bg-secondary);
+        z-index: 1;
+    }
 }

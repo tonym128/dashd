@@ -753,6 +753,88 @@ func (s *Store) Machines(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
+// MachineStat is one machine's rolled-up usage under a filter.
+type MachineStat struct {
+	Machine          string
+	Sessions         int
+	Calls            int
+	TotalTokens      int64
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	ReasoningTokens  int64
+	LLMSeconds       float64
+	Cost             float64
+	LastTS           int64
+}
+
+// MachinesBreakdown returns per-machine totals, most expensive first.
+func (s *Store) MachinesBreakdown(ctx context.Context, f Filter) ([]MachineStat, error) {
+	where, args := f.where("", "ts")
+	q := `
+		SELECT COALESCE(NULLIF(machine, ''), 'local') AS m,
+		       COUNT(DISTINCT session_uid),
+		       COUNT(*),
+		       COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(input_tokens), 0),
+		       COALESCE(SUM(output_tokens), 0),
+		       COALESCE(SUM(cache_read_tokens), 0),
+		       COALESCE(SUM(cache_write_tokens), 0),
+		       COALESCE(SUM(reasoning_tokens), 0),
+		       COALESCE(SUM(llm_seconds), 0),
+		       COALESCE(SUM(cost_usd), 0),
+		       COALESCE(MAX(ts), 0)
+		FROM call` + where + `
+		GROUP BY m ORDER BY SUM(cost_usd) DESC, m`
+	rows, err := s.q.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("machines breakdown: %w", err)
+	}
+	defer rows.Close()
+	var out []MachineStat
+	for rows.Next() {
+		var ms MachineStat
+		if err := rows.Scan(&ms.Machine, &ms.Sessions, &ms.Calls,
+			&ms.TotalTokens, &ms.InputTokens, &ms.OutputTokens,
+			&ms.CacheReadTokens, &ms.CacheWriteTokens, &ms.ReasoningTokens,
+			&ms.LLMSeconds, &ms.Cost, &ms.LastTS); err != nil {
+			return nil, err
+		}
+		out = append(out, ms)
+	}
+	return out, rows.Err()
+}
+
+// MachineStatus records when a push client last checked in.
+type MachineStatus struct {
+	Machine        string
+	LastSeenAt     int64
+	SessionsPushed int
+	CallsPushed    int
+}
+
+// MachineStatuses returns all recorded push client heartbeats, newest first.
+func (s *Store) MachineStatuses(ctx context.Context) ([]MachineStatus, error) {
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT machine, last_seen_at, sessions_pushed, calls_pushed
+		FROM machine_status
+		ORDER BY last_seen_at DESC, machine`)
+	if err != nil {
+		return nil, fmt.Errorf("machine statuses: %w", err)
+	}
+	defer rows.Close()
+	var out []MachineStatus
+	for rows.Next() {
+		var m MachineStatus
+		if err := rows.Scan(&m.Machine, &m.LastSeenAt, &m.SessionsPushed, &m.CallsPushed); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // Reprice recomputes cost for every stored call from the current price table.
 //
 // Cost is written at scan time so that serving a page never has to consult the

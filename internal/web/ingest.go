@@ -8,12 +8,16 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tonym128/dashd/internal/model"
 	"github.com/tonym128/dashd/internal/source"
 )
 
-const maxIngestBytes = 32 << 20 // 32 MiB
+const (
+	maxIngestBytes    = 32 << 20 // 32 MiB
+	maxIngestSessions = 500
+)
 
 // handleIngest accepts parsed sessions pushed by remote `dashd push` clients.
 // It is protected by WithAuth when -auth-token is configured.
@@ -41,8 +45,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("invalid json: %v", err), http.StatusBadRequest)
 		return
 	}
+	if len(req.Sessions) > maxIngestSessions {
+		http.Error(w, fmt.Sprintf("too many sessions in one request (max %d)", maxIngestSessions), http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	s.ingestMu.Lock()
+	defer s.ingestMu.Unlock()
 
 	ingested := 0
+	callsTotal := 0
 	for _, item := range req.Sessions {
 		if item.Session.UID == "" {
 			http.Error(w, "session uid is required", http.StatusBadRequest)
@@ -72,6 +84,12 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ingested++
+		callsTotal += len(item.Session.Calls)
+	}
+	if req.Machine != "" {
+		if err := s.store.RecordMachineHeartbeat(req.Machine, ingested, callsTotal, time.Now()); err != nil {
+			s.log.Warn("record machine heartbeat failed", "machine", req.Machine, "error", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

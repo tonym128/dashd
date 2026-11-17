@@ -33,10 +33,7 @@
     <div class="page-header-row">
       <div>
         <h1>Agent Cost Dashboard</h1>
-        <p class="subtitle">
-          Generated on {{.Generated}} &middot;
-          <a href="#" data-reload>Refresh for latest</a>
-        </p>
+        <p class="subtitle">Generated on {{.Generated}}</p>
       </div>
       <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Dashboard views">
         <button type="button" class="view-tab is-active" role="tab" aria-selected="true" data-view-tab="overview">Overview</button>
@@ -275,6 +272,7 @@
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="models">Models</button>
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="providers">Providers</button>
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="projects">Projects</button>
+    <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="machines">Machines</button>
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="tools">Tools</button>
   </div>
 
@@ -358,6 +356,47 @@
       <tbody id="projects-tbody"></tbody>
     </table>
   </div>
+
+  <div class="section" data-view-section="breakdown" data-breakdown-panel="machines">
+    <div class="section-header"><span>Machines</span></div>
+    <table id="machines-table">
+      <thead>
+        <tr>
+          <th data-sort="name">Machine <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="sessions">Sessions <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="messages">Messages <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="tokens">Total Tokens <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="input_tokens">Input <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="output_tokens">Output <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="cache_read_tokens">Cache Read <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="cost">Cost <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="pct">Share <span class="sort-icon">▼</span></th>
+        </tr>
+      </thead>
+      <tbody id="machines-tbody"></tbody>
+    </table>
+  </div>
+
+  {{if .Machines}}
+  <div class="section" data-view-section="system">
+    <div class="section-header"><span>Connected Machines</span></div>
+    <table id="machines-status-table">
+      <thead>
+        <tr><th>Machine</th><th>Last push</th><th class="numeric">Sessions pushed</th><th class="numeric">Calls pushed</th></tr>
+      </thead>
+      <tbody>
+        {{range .Machines}}
+        <tr>
+          <td>{{.Machine}}</td>
+          <td>{{.LastSeenAgo}}</td>
+          <td class="numeric">{{.SessionsPushed}}</td>
+          <td class="numeric">{{.CallsPushed}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
 
   <div class="section" data-view-section="system">
     <div class="section-header"><span>Scanner</span></div>

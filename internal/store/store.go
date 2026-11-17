@@ -407,6 +407,7 @@ var migrations = []migration{
 	v4ResetClaude,
 	v5CacheWrite1h,
 	v6Machine,
+	v7MachineStatus,
 }
 
 // execScript turns a multi-statement script into a migration step.
@@ -885,6 +886,23 @@ func (s *Store) MarkOrphaned(uids []string) error {
 // ClearOrphaned un-flags a session, called when its log reappears.
 func (s *Store) ClearOrphaned(uid string) error {
 	_, err := s.q.Exec("UPDATE session SET orphaned = 0 WHERE uid = ?", uid)
+	return err
+}
+
+// RecordMachineHeartbeat records when a push client last checked in and how
+// many sessions/calls it delivered.
+func (s *Store) RecordMachineHeartbeat(machine string, sessionsPushed, callsPushed int, at time.Time) error {
+	if machine == "" {
+		return nil
+	}
+	_, err := s.q.Exec(`
+		INSERT INTO machine_status (machine, last_seen_at, sessions_pushed, calls_pushed)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(machine) DO UPDATE SET
+			last_seen_at = excluded.last_seen_at,
+			sessions_pushed = machine_status.sessions_pushed + excluded.sessions_pushed,
+			calls_pushed = machine_status.calls_pushed + excluded.calls_pushed`,
+		machine, at.Unix(), sessionsPushed, callsPushed)
 	return err
 }
 

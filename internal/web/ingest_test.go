@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,5 +105,56 @@ func TestIngestEndpointAuthAndGzip(t *testing.T) {
 	}
 	if !strings.Contains(idxRec.Body.String(), "laptop-1") {
 		t.Errorf("expected rendered index to contain laptop-1")
+	}
+}
+
+func TestSplitAuthAndModelsSync(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	modelsFile := filepath.Join(dir, "models.json")
+	if err := os.WriteFile(modelsFile, []byte(`{"data":[{"id":"google/gemini-4-hydrogen","pricing":{"prompt":"0.0000015","completion":"0.0000075"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := New(st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.ModelsPath = modelsFile
+	handler := WithSplitAuth("ui-secret", "ingest-secret", nil, srv.Handler())
+
+	// Ingest token cannot read the dashboard UI, but can read /api/models.
+	uiReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	uiReq.Header.Set("Authorization", "Bearer ingest-secret")
+	uiRec := httptest.NewRecorder()
+	handler.ServeHTTP(uiRec, uiReq)
+	if uiRec.Code != http.StatusUnauthorized {
+		t.Fatalf("ingest token on UI = %d, want 401", uiRec.Code)
+	}
+
+	mReq := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	mReq.Header.Set("Authorization", "Bearer ingest-secret")
+	mRec := httptest.NewRecorder()
+	handler.ServeHTTP(mRec, mReq)
+	if mRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/models = %d, want 200", mRec.Code)
+	}
+	etag := mRec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected ETag header from /api/models")
+	}
+
+	mReq304 := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	mReq304.Header.Set("Authorization", "Bearer ingest-secret")
+	mReq304.Header.Set("If-None-Match", etag)
+	mRec304 := httptest.NewRecorder()
+	handler.ServeHTTP(mRec304, mReq304)
+	if mRec304.Code != http.StatusNotModified {
+		t.Fatalf("GET /api/models with If-None-Match = %d, want 304", mRec304.Code)
 	}
 }

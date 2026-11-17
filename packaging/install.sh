@@ -7,11 +7,21 @@ set -euo pipefail
 
 REPO="tonym128/dashd"
 LOCAL_BIN=""
+UPGRADE=0
+UNINSTALL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local)
       LOCAL_BIN="${2:-}"
       shift 2
+      ;;
+    --upgrade)
+      UPGRADE=1
+      shift
+      ;;
+    --uninstall)
+      UNINSTALL=1
+      shift
       ;;
     *)
       echo "Unknown option: $1" >&2
@@ -35,6 +45,22 @@ esac
 INSTALL_DIR="${HOME}/.local/bin"
 DATA_DIR="${HOME}/.local/share/dashd"
 CONFIG_DIR="${HOME}/.config/dashd"
+
+if [[ "$UNINSTALL" -eq 1 ]]; then
+  if [[ "$OS" == "linux" ]]; then
+    systemctl --user disable --now dashd-push 2>/dev/null || true
+    rm -f "${HOME}/.config/systemd/user/dashd-push.service"
+    systemctl --user daemon-reload 2>/dev/null || true
+  elif [[ "$OS" == "darwin" ]]; then
+    PLIST_FILE="${HOME}/Library/LaunchAgents/com.dashd.push.plist"
+    launchctl unload "$PLIST_FILE" 2>/dev/null || true
+    rm -f "$PLIST_FILE"
+  fi
+  rm -f "$INSTALL_DIR/dashd"
+  echo "Uninstalled dashd service and binary. Config ($CONFIG_DIR) and state ($DATA_DIR) were preserved."
+  exit 0
+fi
+
 mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$CONFIG_DIR"
 
 if [[ -n "$LOCAL_BIN" ]]; then
@@ -63,6 +89,18 @@ else
     install -m 0644 "$EXTRACTED_DIR/models.json" "$DATA_DIR/models.json"
   fi
   echo "Installed dashd $TAG to $INSTALL_DIR/dashd"
+fi
+
+if [[ "$UPGRADE" -eq 1 && -f "$CONFIG_DIR/push.env" ]]; then
+  if [[ "$OS" == "linux" ]]; then
+    systemctl --user restart dashd-push 2>/dev/null || true
+  elif [[ "$OS" == "darwin" ]]; then
+    PLIST_FILE="${HOME}/Library/LaunchAgents/com.dashd.push.plist"
+    launchctl unload "$PLIST_FILE" 2>/dev/null || true
+    launchctl load -w "$PLIST_FILE" 2>/dev/null || true
+  fi
+  echo "Upgraded dashd binary and restarted service (kept existing configuration)."
+  exit 0
 fi
 
 echo ""

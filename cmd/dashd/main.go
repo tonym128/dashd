@@ -72,8 +72,19 @@ func run(o options, command string, stdout io.Writer) error {
 	if o.authToken == "" {
 		o.authToken = os.Getenv("DASHD_AUTH_TOKEN")
 	}
+	if o.ingestToken == "" {
+		o.ingestToken = os.Getenv("DASHD_INGEST_TOKEN")
+	}
 	if o.remote == "" {
 		o.remote = os.Getenv("DASHD_REMOTE")
+	}
+	if command == "push" {
+		if home, err := os.UserHomeDir(); err == nil {
+			defDB := filepath.Join(home, ".local/share/dashd/dashboard.db")
+			if o.db == defDB {
+				o.db = filepath.Join(home, ".local/share/dashd/push-state.db")
+			}
+		}
 	}
 
 	level := slog.LevelInfo
@@ -112,7 +123,7 @@ func run(o options, command string, stdout io.Writer) error {
 	pricer, err := source.NewPricer(o.models, "")
 	if err != nil {
 		return fmt.Errorf("%w\n\nPricing is required. Fetch it with:\n  "+
-			"python3 update_models.py", err)
+			"dashd update-models", err)
 	}
 	warnIfFallbackOnly(pricer, o.models, log)
 
@@ -131,7 +142,11 @@ func run(o options, command string, stdout io.Writer) error {
 		if o.remote == "" {
 			return fmt.Errorf("-remote URL (or DASHD_REMOTE) is required for push")
 		}
-		rsink = newRemoteSink(o.remote, o.authToken, o.machine).withModelsSync(o.models, pricer, log)
+		pushToken := o.ingestToken
+		if pushToken == "" {
+			pushToken = o.authToken
+		}
+		rsink = newRemoteSink(o.remote, pushToken, o.machine).withModelsSync(o.models, pricer, log)
 		rsink.SyncModels()
 		sink = rsink
 	}
@@ -224,7 +239,7 @@ func run(o options, command string, stdout io.Writer) error {
 		Addr: o.addr,
 		// Authentication is a wrapper rather than something the dashboard knows
 		// about, so this file decides policy and web/ stays a dashboard.
-		Handler: web.WithAuth(o.authToken, log, srv.Handler()),
+		Handler: web.WithSplitAuth(o.authToken, o.ingestToken, log, srv.Handler()),
 		// Generous, because a first render over a large history is genuinely
 		// slower than a static page but not unbounded.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -393,7 +408,7 @@ func warnIfFallbackOnly(pricer *source.Pricer, modelsPath string, log *slog.Logg
 		"live_models", 0,
 		"effect", "models absent from the fallback table are reported unpriced; "+
 			"fallback rows may be older than the provider's current rates",
-		"fix", "run `python3 update_models.py` in the dashd checkout, or pass -models /path/to/models.json",
+		"fix", "run `dashd update-models` (or pass -models /path/to/models.json)",
 	)
 }
 
@@ -412,7 +427,7 @@ func printStats(st *store.Store, out io.Writer) error {
 	fmt.Fprintf(out, "tokens     %d\n", totals.TotalTokens)
 	fmt.Fprintf(out, "cost       $%.2f\n", totals.Cost)
 	if totals.UnpricedCalls > 0 {
-		fmt.Fprintf(out, "unpriced   %d calls (no rate found; run `update_models.py`)\n", totals.UnpricedCalls)
+		fmt.Fprintf(out, "unpriced   %d calls (no rate found; run `dashd update-models`)\n", totals.UnpricedCalls)
 	}
 	if totals.FirstTS > 0 {
 		oldest, newest, _ := st.HistoryRange(ctx, store.Filter{})

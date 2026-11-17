@@ -10,6 +10,10 @@
     <string>push</string>
     <string>-interval</string>
     <string>30s</string>
+    <string>-models</string>
+    <string>/usr/local/lib/dashd/models.json</string>
+    <string>-models-refresh</string>
+    <string>24h</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

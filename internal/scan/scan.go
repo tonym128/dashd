@@ -130,6 +130,11 @@ func (s *Scanner) RunOnce(ctx context.Context) error {
 		changedFiles += found.changed
 		changedSessions += ingested
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				s.log.Info("source scan canceled", "agent", src.Agent)
+				errs = append(errs, fmt.Errorf("%s: %w", src.Agent, err))
+				continue
+			}
 			// One broken source must not stop the others; the failure is
 			// recorded on that source's status and surfaced in the UI, and
 			// joined into the returned error so a cron-driven caller's exit
@@ -145,9 +150,14 @@ func (s *Scanner) RunOnce(ctx context.Context) error {
 	if s.cfg.OpenCodeDB != "" {
 		seen, changed, ingested, err := s.scanOpenCode(ctx, states)
 		if err != nil {
-			s.log.Error("opencode scan failed", "error", err)
-			s.recordStatus(model.AgentOpencode, seen, changed, ingested, err)
-			errs = append(errs, fmt.Errorf("opencode: %w", err))
+			if errors.Is(err, context.Canceled) {
+				s.log.Info("opencode scan canceled")
+				errs = append(errs, fmt.Errorf("opencode: %w", err))
+			} else {
+				s.log.Error("opencode scan failed", "error", err)
+				s.recordStatus(model.AgentOpencode, seen, changed, ingested, err)
+				errs = append(errs, fmt.Errorf("opencode: %w", err))
+			}
 		} else {
 			s.recordStatus(model.AgentOpencode, seen, changed, ingested, nil)
 		}

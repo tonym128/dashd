@@ -7,15 +7,24 @@ services:
     ports:
       - "8753:8753"
     environment:
-      DASHD_AUTH_TOKEN: "${DASHD_AUTH_TOKEN:?Set DASHD_AUTH_TOKEN in .env or shell}"
+      DASHD_AUTH_TOKEN: "${DASHD_AUTH_TOKEN:-}"
+      DASHD_INGEST_TOKEN: "${DASHD_INGEST_TOKEN:-}"
     volumes:
       - dashd-data:/var/lib/dashd
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8753/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     command:
       - serve
       - -addr
       - 0.0.0.0:8753
       - -models
       - /usr/local/lib/dashd/models.json
+      - -models-refresh
+      - 24h
       - -db
       - /var/lib/dashd/dashboard.db
 

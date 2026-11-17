@@ -559,6 +559,11 @@ func tokenDetailRows(t store.Totals) []statDetail {
 	}
 	if t.CacheReadTokens > 0 {
 		rows = append(rows, statDetail{"Cache read", formatCompact(t.CacheReadTokens)})
+		denom := t.InputTokens + t.CacheReadTokens + t.CacheWriteTokens
+		if denom > 0 {
+			hitPct := float64(t.CacheReadTokens) / float64(denom) * 100
+			rows = append(rows, statDetail{"Cache hit", fmt.Sprintf("%.1f%%", hitPct)})
+		}
 	}
 	if t.CacheWriteTokens > 0 {
 		rows = append(rows, statDetail{"Cache write", formatCompact(t.CacheWriteTokens)})
@@ -582,4 +587,33 @@ func formatCompact(n int64) string {
 	default:
 		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
 	}
+}
+
+func machinesJSON(machines []store.MachineStat, totalCost float64) []map[string]any {
+	out := make([]map[string]any, 0, len(machines))
+	for _, m := range machines {
+		pct := 0.0
+		if totalCost > 0 {
+			pct = m.Cost / totalCost * 100
+		}
+		out = append(out, map[string]any{
+			"name":               m.Machine,
+			"sessions":           m.Sessions,
+			"messages":           m.Calls,
+			"tokens":             m.TotalTokens,
+			"total_tokens":       m.TotalTokens,
+			"input_tokens":       m.InputTokens,
+			"output_tokens":      m.OutputTokens,
+			"cache_read_tokens":  m.CacheReadTokens,
+			"cache_write_tokens": m.CacheWriteTokens,
+			"reasoning_tokens":   m.ReasoningTokens,
+			"llm_time":           m.LLMSeconds,
+			"avg_tps":            ratio(float64(m.OutputTokens), m.LLMSeconds),
+			"cost":               m.Cost,
+			"pct":                pct,
+			"last_activity":      m.LastTS,
+			"last_display":       displayTime(m.LastTS),
+		})
+	}
+	return out
 }

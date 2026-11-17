@@ -42,9 +42,10 @@ type options struct {
 	once          bool
 	// authToken is empty unless -auth-token was given, which means "no
 	// authentication", not "authentication with an empty secret".
-	authToken string
-	verbose   bool
-	showVer   bool
+	authToken   string
+	ingestToken string
+	verbose     bool
+	showVer     bool
 }
 
 // newFlagSet builds the flag set. It is separate so that both parseArgs and
@@ -75,6 +76,8 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 		"for 'push', run a single pass and exit instead of looping on -interval")
 	fs.StringVar(&o.authToken, "auth-token", "",
 		"require/send this bearer token (also DASHD_AUTH_TOKEN); empty disables authentication")
+	fs.StringVar(&o.ingestToken, "ingest-token", "",
+		"optional write-only bearer token for /api/ingest and /api/models (also DASHD_INGEST_TOKEN)")
 	fs.BoolVar(&o.verbose, "verbose", false, "log every request and scan detail")
 	fs.BoolVar(&o.showVer, "version", false, "print the version, commit and build date, then exit")
 	return fs

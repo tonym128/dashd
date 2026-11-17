@@ -607,10 +607,17 @@ function copyResumeCommand(btn) {
         }, 1500);
     }
 
+    function showError() {
+        if (typeof window !== 'undefined' && typeof window.showDashdToast === 'function') {
+            window.showDashdToast('Could not copy to clipboard');
+        }
+    }
+
     // Use clipboard API if available (HTTPS or localhost)
     if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(cmd).then(showSuccess).catch(err => {
             console.error('Failed to copy:', err);
+            showError();
         });
     } else {
         // Fallback for HTTP contexts
@@ -626,6 +633,7 @@ function copyResumeCommand(btn) {
             showSuccess();
         } catch (err) {
             console.error('Fallback copy failed:', err);
+            showError();
         }
         document.body.removeChild(textArea);
     }
@@ -1414,7 +1422,7 @@ updateSortIcons('tools-table', toolSort);
 
     // Breakdown sub-tabs (all, models, providers, projects, tools)
     const breakdownTabsEl = document.getElementById('breakdown-tabs');
-    const validBreakdowns = new Set(['all', 'models', 'providers', 'projects', 'tools']);
+    const validBreakdowns = new Set(['all', 'models', 'providers', 'projects', 'machines', 'tools']);
     function setActiveBreakdown(sub) {
         if (!validBreakdowns.has(sub)) sub = 'all';
         if (breakdownTabsEl && breakdownTabsEl.querySelectorAll) {
@@ -1567,5 +1575,58 @@ updateSortIcons('tools-table', toolSort);
                 if (filterToggle) filterToggle.setAttribute('aria-expanded', 'false');
             }
         });
+    }
+
+    // Machines breakdown table
+    const machines = dashboardData.machines || [];
+    const machineSort = { field: 'cost', asc: false };
+    function renderMachines() {
+        const tbody = document.getElementById('machines-tbody');
+        if (!tbody) return;
+        const sorted = sortData(machines, machineSort);
+        if (!sorted.length) {
+            tbody.innerHTML = emptyRow(9, 'No machine calls in this view.');
+            return;
+        }
+        tbody.innerHTML = sorted.map(m => `
+            <tr>
+                <td><span class="badge">${escapeHtml(m.name)}</span></td>
+                <td class="numeric" title="${formatFullNumber(m.sessions)}">${formatCompactNumber(m.sessions)}</td>
+                <td class="numeric" title="${formatFullNumber(m.messages)}">${formatCompactNumber(m.messages)}</td>
+                <td class="numeric tokens" title="${escapeHtml(tokenTitle(m))}">${formatCompactNumber(m.tokens)}</td>
+                <td class="numeric tokens" title="${formatFullNumber(m.input_tokens)}">${formatCompactNumber(m.input_tokens)}</td>
+                <td class="numeric tokens" title="${formatFullNumber(m.output_tokens)}">${formatCompactNumber(m.output_tokens)}</td>
+                <td class="numeric tokens" title="${formatFullNumber(m.cache_read_tokens)}">${formatCompactNumber(m.cache_read_tokens)}</td>
+                <td class="numeric cost">$${Number(m.cost || 0).toFixed(2)}</td>
+                <td class="numeric">
+                    <div class="bar-container" style="width: 100px; display: inline-block; vertical-align: middle;">
+                        <div class="bar" style="width: ${Number(m.pct || 0)}%"></div>
+                    </div>
+                    ${Number(m.pct || 0).toFixed(1)}%
+                </td>
+            </tr>
+        `).join('');
+    }
+    if (document.getElementById('machines-tbody')) {
+        setupSorting('machines-table', machineSort, renderMachines);
+        renderMachines();
+    }
+
+    // Subtle /healthz check every 60s while visible to flag new data on Refresh
+    const initialCalls = dashboardData.totalMessages || 0;
+    const reloadBtn = document.querySelector ? document.querySelector('.topbar [data-reload]') : null;
+    if (reloadBtn && typeof fetch === 'function' && typeof setInterval === 'function') {
+        setInterval(() => {
+            if (document.visibilityState && document.visibilityState !== 'visible') return;
+            fetch('/healthz', { cache: 'no-store' })
+                .then(r => r.ok ? r.json() : null)
+                .then(h => {
+                    if (h && typeof h.calls === 'number' && h.calls > initialCalls) {
+                        reloadBtn.textContent = 'Refresh (new data)';
+                        reloadBtn.style.borderColor = 'var(--accent-green)';
+                    }
+                })
+                .catch(() => {});
+        }, 60000);
     }
 })();
