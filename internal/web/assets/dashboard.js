@@ -74,9 +74,54 @@ const dashboardData = window.dashboardData || {};
     // accessible via a toggle.
     const RECENT_DAYS = 14;
     let showAll = false;
+    let rollupMode = 'daily';
+
+    function aggregateSpending(days, mode) {
+        if (mode === 'daily') return days;
+        const buckets = {};
+        const order = [];
+        days.forEach(d => {
+            let key = d.day.slice(0, 7); // monthly: YYYY-MM
+            if (mode === 'weekly') {
+                const dt = new Date(d.day + 'T00:00:00');
+                const day = dt.getDay();
+                const diff = dt.getDate() - day + (day === 0 ? -6 : 1);
+                dt.setDate(diff);
+                const y = dt.getFullYear();
+                const m = String(dt.getMonth() + 1).padStart(2, '0');
+                const dd = String(dt.getDate()).padStart(2, '0');
+                key = `Wk ${y}-${m}-${dd}`;
+            }
+            if (!buckets[key]) {
+                buckets[key] = { day: key, cost: 0, models: {} };
+                order.push(key);
+            }
+            buckets[key].cost += d.cost;
+            Object.entries(d.models || {}).forEach(([m, c]) => {
+                buckets[key].models[m] = (buckets[key].models[m] || 0) + c;
+            });
+        });
+        return order.map(k => buckets[k]);
+    }
 
     function getVisibleDays() {
-        return showAll ? dailyStats : dailyStats.slice(-RECENT_DAYS);
+        const series = aggregateSpending(dailyStats, rollupMode);
+        return showAll ? series : series.slice(-RECENT_DAYS);
+    }
+
+    const rollupTabs = document.getElementById('daily-rollup-tabs');
+    if (rollupTabs && rollupTabs.addEventListener) {
+        rollupTabs.addEventListener('click', event => {
+            const btn = event.target.closest('[data-daily-rollup]');
+            if (!btn) return;
+            rollupMode = btn.dataset.dailyRollup || 'daily';
+            rollupTabs.querySelectorAll('[data-daily-rollup]').forEach(t => {
+                const active = t.dataset.dailyRollup === rollupMode;
+                t.classList.toggle('is-active', active);
+                t.setAttribute('aria-selected', active ? 'true' : 'false');
+            });
+            render();
+        });
     }
 
     function render() {
@@ -301,8 +346,20 @@ const ACTIVITY_COLUMNS = 9;
 // machine whose logs dashd cannot read every table is empty. That reader must
 // not conclude there was no usage, so the row says what it means instead.
 function emptyRow(columns, message) {
+    let reset = '';
+    if (typeof window !== 'undefined' && window.filterState) {
+        const f = window.filterState;
+        const hasFilter = (f.models && f.models.length) ||
+            (f.agents && f.agents.length) ||
+            (f.projects && f.projects.length) ||
+            (f.machines && f.machines.length) ||
+            (typeof location !== 'undefined' && location.search.includes('date_'));
+        if (hasFilter) {
+            reset = ' <a href="/" class="clear-link">Reset filters</a>';
+        }
+    }
     return '<tr><td colspan="' + columns + '" class="empty-row">' +
-        escapeHtml(message) + '</td></tr>';
+        escapeHtml(message) + reset + '</td></tr>';
 }
 
 function formatFullNumber(value) {

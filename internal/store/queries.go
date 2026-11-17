@@ -1028,3 +1028,32 @@ func (s *Store) ProjectTools(ctx context.Context, f Filter) ([]ProjectTool, erro
 	}
 	return out, rows.Err()
 }
+
+// UnpricedModel counts calls for one model that had no known rate.
+type UnpricedModel struct {
+	Model string
+	Calls int
+}
+
+// UnpricedModels returns models with unpriced calls, most frequent first.
+func (s *Store) UnpricedModels(ctx context.Context) ([]UnpricedModel, error) {
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT model, COUNT(*) AS c
+		FROM call
+		WHERE priced = 0
+		GROUP BY model
+		ORDER BY c DESC, model`)
+	if err != nil {
+		return nil, fmt.Errorf("unpriced models: %w", err)
+	}
+	defer rows.Close()
+	var out []UnpricedModel
+	for rows.Next() {
+		var u UnpricedModel
+		if err := rows.Scan(&u.Model, &u.Calls); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}

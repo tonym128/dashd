@@ -374,6 +374,7 @@ func sessionView(s store.SessionRow) map[string]any {
 		"UID":      s.UID,
 		"Agent":    s.Agent,
 		"Project":  s.Project,
+		"Machine":  s.Machine,
 		"Path":     s.Path,
 		"Title":    s.Title,
 		"Calls":    s.Calls,

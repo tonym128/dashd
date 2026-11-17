@@ -229,7 +229,14 @@
   </div>
 
   <div class="section" data-view-section="overview">
-    <div class="section-header"><span>Daily Spending</span></div>
+    <div class="section-header">
+      <span>Daily Spending</span>
+      <div class="sub-tabs" id="daily-rollup-tabs" style="margin-bottom:0" role="tablist" aria-label="Spending rollup">
+        <button type="button" class="sub-tab is-active" role="tab" aria-selected="true" data-daily-rollup="daily">Daily</button>
+        <button type="button" class="sub-tab" role="tab" aria-selected="false" data-daily-rollup="weekly">Weekly</button>
+        <button type="button" class="sub-tab" role="tab" aria-selected="false" data-daily-rollup="monthly">Monthly</button>
+      </div>
+    </div>
     <div class="daily-chart" id="daily-chart-content"></div>
   </div>
 
@@ -398,6 +405,7 @@
   </div>
   {{end}}
 
+  {{if or .Scan (not .Machines)}}
   <div class="section" data-view-section="system">
     <div class="section-header"><span>Scanner</span></div>
     <table id="scan-table">
@@ -415,11 +423,12 @@
           <td>{{if .Error}}<span class="scan-error">{{.Error}}</span>{{else}}ok{{end}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">{{if .Machines}}Remote-only server &mdash; stats are pushed by connected machines above.{{else}}The scanner has not run yet.{{end}}</td></tr>
+        <tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">The scanner has not run yet.</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
+  {{end}}
 
   <footer class="refresh-note">
     Costs are priced from each agent's reported usage, falling back to published
@@ -500,7 +509,7 @@
     <p class="subtitle"><a href="/">&larr; Back to dashboard</a></p>
     <h1>{{if .Session.Title}}{{.Session.Title}}{{else}}Session{{end}}</h1>
     <p class="subtitle">
-      {{.Session.Agent}} &middot; {{.Session.Project}} &middot;
+      {{.Session.Agent}} &middot; {{.Session.Project}}{{if .Session.Machine}} &middot; <span class="badge">{{.Session.Machine}}</span>{{end}} &middot;
       generated {{.Generated}}
     </p>
   </header>

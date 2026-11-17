@@ -104,6 +104,11 @@ func run(o options, command string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "updated %s (%d models)\n", o.models, n)
 		return nil
 	}
+	if command == "doctor" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runDoctor(ctx, o, stdout)
+	}
 
 	// The store reports a database it could not chmod 0600 through this hook,
 	// rather than failing: a filesystem without permission bits should not stop
@@ -126,6 +131,7 @@ func run(o options, command string, stdout io.Writer) error {
 			"dashd update-models", err)
 	}
 	warnIfFallbackOnly(pricer, o.models, log)
+	log.Debug("pricing configured", "models", o.models)
 
 	sources, openCodeDB := scan.DefaultSources(o.home)
 	// The flag wins over the location under -home. It used to be read here and
@@ -185,10 +191,10 @@ func run(o options, command string, stdout io.Writer) error {
 			return err
 		}
 		if o.modelsRefresh > 0 {
-			go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, log)
+			go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, nil, log)
 		}
 		log.Info("pushing continuously", "machine", o.machine, "remote", o.remote, "interval", o.interval)
-		scanner.Run(ctx, o.interval)
+		runPushLoop(ctx, scanner, rsink, o.interval, log)
 		return nil
 
 	case "reprice":
@@ -215,10 +221,11 @@ func run(o options, command string, stdout io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	if o.modelsRefresh > 0 {
+		go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, st, log)
+	}
+
 	if command == "serve-and-scan" {
-		if o.modelsRefresh > 0 {
-			go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, log)
-		}
 		var scannerDone sync.WaitGroup
 		scannerDone.Add(1)
 		go func() {
@@ -289,7 +296,7 @@ func run(o options, command string, stdout io.Writer) error {
 	return nil
 }
 
-func runModelsRefresher(ctx context.Context, path string, interval time.Duration, pricer *source.Pricer, log *slog.Logger) {
+func runModelsRefresher(ctx context.Context, path string, interval time.Duration, pricer *source.Pricer, st *store.Store, log *slog.Logger) {
 	refresh := func() {
 		rctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
@@ -303,6 +310,16 @@ func runModelsRefresher(ctx context.Context, path string, interval time.Duration
 			return
 		}
 		log.Info("auto-updated models", "path", path, "models", n)
+		if st != nil {
+			repriced, err := st.Reprice(ctx, func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
+				return pricer.CostCall(m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
+			})
+			if err != nil {
+				log.Warn("auto-reprice after models update failed", "error", err)
+			} else {
+				log.Info("auto-repriced calls", "calls", repriced)
+			}
+		}
 	}
 
 	if st, err := os.Stat(path); err != nil || time.Since(st.ModTime()) >= interval {
@@ -428,6 +445,11 @@ func printStats(st *store.Store, out io.Writer) error {
 	fmt.Fprintf(out, "cost       $%.2f\n", totals.Cost)
 	if totals.UnpricedCalls > 0 {
 		fmt.Fprintf(out, "unpriced   %d calls (no rate found; run `dashd update-models`)\n", totals.UnpricedCalls)
+		if unpriced, err := st.UnpricedModels(ctx); err == nil {
+			for _, u := range unpriced {
+				fmt.Fprintf(out, "  %-32s %d calls\n", u.Model, u.Calls)
+			}
+		}
 	}
 	if totals.FirstTS > 0 {
 		oldest, newest, _ := st.HistoryRange(ctx, store.Filter{})

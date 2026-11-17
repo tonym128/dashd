@@ -2,6 +2,11 @@
 # Downloads the latest release from GitHub, prompts for configuration,
 # updates models.json, and registers a Task Scheduler background task.
 
+param(
+    [switch]$Upgrade,
+    [switch]$Uninstall
+)
+
 $ErrorActionPreference = "Stop"
 
 $Repo = "tonym128/dashd"
@@ -9,6 +14,14 @@ $InstallDir = Join-Path $env:LOCALAPPDATA "dashd"
 $ModelsPath = Join-Path $InstallDir "models.json"
 $DbPath = Join-Path $InstallDir "push-state.db"
 $ExePath = Join-Path $InstallDir "dashd.exe"
+$TaskName = "dashd-push"
+
+if ($Uninstall) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    if (Test-Path $ExePath) { Remove-Item -Force $ExePath }
+    Write-Host "Uninstalled '$TaskName' scheduled task and $ExePath. Database ($DbPath) and environment variables were preserved."
+    exit 0
+}
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
@@ -35,6 +48,17 @@ if (Test-Path (Join-Path $ExtractedDir "models.json")) {
 Remove-Item -Force $TmpZip
 Remove-Item -Recurse -Force $TmpExtract
 Write-Host "Installed dashd $Tag to $ExePath"
+
+if ($Upgrade) {
+    try {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Start-ScheduledTask -TaskName $TaskName
+        Write-Host "Upgraded dashd binary and restarted '$TaskName' (kept existing configuration)."
+        exit 0
+    } catch {
+        Write-Warning "Could not restart existing task; continuing with interactive setup."
+    }
+}
 
 Write-Host ""
 Write-Host "=== dashd Agent Configuration ==="

@@ -26,7 +26,7 @@ const defaultCommand = "serve-and-scan"
 // commands is the complete set. It is a slice rather than inline cases in a
 // switch so that the same list can be printed in the error message and the
 // usage text, which is the only way those two stay in agreement.
-var commands = []string{"serve-and-scan", "serve", "scan", "push", "reprice", "update-models", "stats"}
+var commands = []string{"serve-and-scan", "serve", "scan", "push", "reprice", "update-models", "doctor", "stats"}
 
 // options is the parsed command line.
 type options struct {
@@ -168,6 +168,7 @@ Commands:
   push            scan local logs and push updates to a remote dashd server
   reprice         re-cost every stored call with the current price dump
   update-models   download the latest OpenRouter model pricing to -models
+  doctor          check local agent logs, pricing, database, and remote server
   stats           print totals from the existing database, change nothing
 
 Flags:

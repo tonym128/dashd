@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tonym128/dashd/internal/model"
+	"github.com/tonym128/dashd/internal/scan"
 	"github.com/tonym128/dashd/internal/source"
 )
 
@@ -32,6 +35,7 @@ type remoteSink struct {
 	log             *slog.Logger
 	client          *http.Client
 	pending         map[string]model.IngestSession
+	lastPushAt      time.Time
 }
 
 func newRemoteSink(remoteURL, token, machine string) *remoteSink {
@@ -70,12 +74,19 @@ func (r *remoteSink) RecomputeSession(uid string) error {
 		return nil
 	}
 	delete(r.pending, uid)
-
-	payload := model.IngestRequest{
+	return r.postIngest(model.IngestRequest{
 		Machine:  r.machine,
 		Sessions: []model.IngestSession{item},
-	}
+	})
+}
 
+// SendHeartbeat sends an empty ingest payload so the remote server records
+// this machine as active even when no local session logs changed.
+func (r *remoteSink) SendHeartbeat() error {
+	return r.postIngest(model.IngestRequest{Machine: r.machine})
+}
+
+func (r *remoteSink) postIngest(payload model.IngestRequest) error {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	if err := json.NewEncoder(gz).Encode(payload); err != nil {
@@ -106,6 +117,7 @@ func (r *remoteSink) RecomputeSession(uid string) error {
 		return fmt.Errorf("post %s: status %d: %s", r.endpoint, resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 
+	r.lastPushAt = time.Now()
 	var ack struct {
 		ModelsETag string `json:"models_etag"`
 	}
@@ -115,6 +127,40 @@ func (r *remoteSink) RecomputeSession(uid string) error {
 		}
 	}
 	return nil
+}
+
+// runPushLoop runs scanner.RunOnce on interval with exponential backoff on
+// errors (capped at 5m) and a periodic 5m idle heartbeat when nothing changed.
+func runPushLoop(ctx context.Context, scanner *scan.Scanner, rsink *remoteSink, interval time.Duration, log *slog.Logger) {
+	const maxBackoff = 5 * time.Minute
+	const heartbeatEvery = 5 * time.Minute
+	backoff := interval
+
+	for {
+		err := scanner.RunOnce(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			backoff = min(backoff*2, maxBackoff)
+			log.Warn("push pass failed; backing off", "retry_in", backoff, "error", err)
+		} else {
+			backoff = interval
+			if rsink.lastPushAt.IsZero() || time.Since(rsink.lastPushAt) >= heartbeatEvery {
+				if hbErr := rsink.SendHeartbeat(); hbErr != nil {
+					log.Debug("heartbeat failed", "error", hbErr)
+				}
+			}
+		}
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 // SyncModels fetches the remote server's models.json if its ETag differs from

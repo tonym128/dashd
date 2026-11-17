@@ -1,150 +1,135 @@
 # dashd — Project Review & Roadmap (`PLAN.md`)
 
-A comprehensive review of `dashd` across **UI, UX, Security, Agent, Server, Installation, Data, and Reporting**, organized into concrete items to **develop**, **change**, and **remove**.
+A comprehensive review of `dashd` (as of `v0.4.1`) across **UI, UX, Security, Agent, Server, Installation, Data, and Reporting**, organized into what is already shipped and what remains to **develop**, **change**, and **remove**.
+
+---
+
+## Recently Completed (v0.2.0 – v0.4.1)
+- Multi-machine tracking (`machine` column on `session`, `call`, `tool_call`, `machine_status` heartbeats, `?machine=` filter).
+- Remote ingestion (`POST /api/ingest` with gzip + `ingestMu` serialization + 500-session cap) and `dashd push` agent (`push-state.db` default).
+- Server → client pricing sync (`GET /api/models` with `ETag`/`304`, `models_etag` in `/api/ingest` ack) + `dashd update-models` + `-models-refresh`.
+- Split authentication (`-ingest-token` / `DASHD_INGEST_TOKEN` vs `-auth-token` / `DASHD_AUTH_TOKEN`).
+- Sticky topbar, view tabs (`Overview`, `Sessions`, `Breakdowns`, `System`, `All`), `Machines` breakdown & `Connected Machines` panel, **Cache hit %** on Total Tokens card, `60s` `/healthz` new-data indicator, and `scanSummary` machine-push status.
+- Interactive installers ([packaging/install.sh](packaging/install.sh) with `--upgrade`/`--uninstall`, [packaging/install.ps1](packaging/install.ps1)) and [docker-compose.yml](docker-compose.yml) with `/healthz` healthcheck.
 
 ---
 
 ## 1. UI (`internal/web/templates/index.html`, `dashboard.css`, `dashboard.js`)
 
 ### Develop
-- **Machine Breakdown Panel & Chart**: `machine` is now stored on `session`, `call`, and `tool_call` and filterable via `?machine=`, but there is no dedicated **Machines** breakdown table (like Models/Providers/Projects) showing cost, calls, tokens, and last seen per host.
 - **Interactive Chart Tooltips**: Daily Spending and Activity & Throughput bars currently rely on native HTML `title=` attributes, which have hover delay and don't work on touch or keyboard focus. Add a lightweight floating popover showing exact cost, token split, and date/bucket on hover/focus.
-- **Session Detail (`session.html`) Enhancements**: Display the originating `Machine` badge, per-model cost subtotal within the session, and a `Copy resume command` button directly on the session detail page.
+- **Session Detail (`session.html`) Enhancements**: Display the originating `Machine` badge, per-model cost subtotal within the session, and a `Copy resume command` button directly on `/session`.
+- **Compact / Detailed Table Column Toggle**: Allow toggling secondary token sub-columns (`Cache Write`, `Reasoning`) on `Models`, `Model Providers`, and `Machines` to reduce horizontal scrolling on laptops.
 
 ### Change
 - **Replace `<select multiple size="5">` in `#filter-panel`**: Native multi-select boxes require `Ctrl/Cmd+Click` and are awkward on mobile/touch. Replace them with searchable checkbox popovers synced to the form inputs so multi-filtering is one-click and works cleanly on all devices.
-- **Table Column Priority & Sticky First Column**: `Models` and `Model Providers` (11 columns) and `All Sessions` (10 columns) scroll horizontally on laptops/tablets. Pin the first column (`position: sticky; left: 0`) and add a "Compact / Detailed" column toggle (hiding `Cache Write`, `Reasoning`, etc. in compact mode).
-- **Scanner Status on Remote-Only Servers**: When `dashd serve` runs as a central receiver for `dashd push` agents, the `Scanner` table and `Sources` panel reflect the server's empty local home directory (`no logs`), which looks like an error. Switch the `System` tab to show **Connected Machines / Last Push** alongside local scanner status, and suppress the `SourcesNeedAction` warning when `serve`-only mode has ingested remote sessions.
+- **Hide Local Scanner Table on Remote-Only Servers**: In the `System` tab, when `len(.Scan) == 0 && len(.Machines) > 0`, hide `#scan-table` completely rather than rendering a single placeholder row underneath `Connected Machines`.
 
 ### Remove
-- **Duplicate `Refresh for latest` Link in `.page-header`**: Now that the sticky `.topbar` has a dedicated `Refresh` button, the inline `Generated on ... · Refresh for latest` link in `.page-header` is redundant.
+- **Hardcoded Inline Widths on `.bar-container`**: Move `style="width: 100px; display: inline-block; vertical-align: middle;"` in `dashboard.js` into `.bar-container` in `dashboard.css`.
 
 ---
 
 ## 2. UX
 
 ### Develop
-- **Live / Auto-Refresh Option**: Add an optional auto-refresh toggle (`Off / 30s / 60s`) or SSE/polling `/healthz` check in the topbar that shows a subtle `"New data available — Refresh"` pill when `calls` increases, rather than forcing manual reloads.
-- **Empty Filtered State CTA**: When filters match 0 rows, tables currently say `"No sessions in this view."` Add a one-click **"Reset filters"** button inside empty filtered states.
-- **CSV / JSON Export**: Add an export button on Sessions, Models, Projects, and Daily Spending for accounting/reimbursement workflows.
+- **Empty Filtered State "Reset filters" CTA**: When filters match 0 rows, add a one-click **"Reset filters"** button inside empty table states instead of plain text.
+- **Unpriced Calls Filter Shortcut**: Make the `Unpriced Calls` stat card clickable (e.g. `?unpriced=1`) so users can immediately see which model names lack rates without hunting through `/session` pages.
+- **CSV / JSON Export**: Add an export button on Sessions, Models, Projects, Machines, and Daily Spending for accounting/reimbursement workflows.
 
 ### Change
-- **Filter Apply Without Losing Tab State**: Submitting `#filter-form` performs a full `GET /?...` reload, which drops the `#hash` if the user wasn't careful (though `localStorage` restores it). Preserve the active view tab seamlessly and consider client-side or `fetch`-based partial updates for faster filtering.
-- **Unpriced Calls Visibility**: Surface a clickable banner or filter shortcut (`?unpriced=1`) when `Totals.UnpricedCalls > 0` so users can immediately see which model names lack rates instead of hunting through `/session` pages.
+- **Client-Side / Partial Filter Updates**: Submitting `#filter-form` currently triggers a full `GET /?...` page reload. Fetching updated JSON or preserving scroll/tab state smoothly would feel snappier.
+- **Auto-Refresh Toggle**: The 60s `/healthz` poll currently highlights `Refresh (new data)`. Add an optional auto-reload toggle (`Off / Auto`) in the topbar for wall-mounted or always-open monitor tabs.
 
 ### Remove
-- **Native `alert`/silent copy failures**: `copyResumeCommand` logs to `console.error` on clipboard failure; surface an error toast (`showDashdToast`) if clipboard write fails.
+- **Dead/Redundant `console.error` Only Failures**: Surface user-visible error toasts (`showDashdToast`) for any failed `/api/activity` fetch as well as clipboard failures.
 
 ---
 
 ## 3. Security (`internal/web/auth.go`, `headers.go`, `ingest.go`)
 
 ### Develop
-- **Per-Machine / Scoped Ingest Tokens (or Read vs. Write Token Split)**: Currently `-auth-token` is a single shared secret for both reading the web UI and pushing via `POST /api/ingest`. Separating `-ingest-token` (write-only for agents) from `-auth-token` (UI read access) limits blast radius if an agent machine is compromised.
-- **Rate Limiting / Body & Concurrency Guards on `/api/ingest`**: `handleIngest` caps request size at `32 MiB`, which is good, but has no per-IP/per-request session count cap or rate limit. Add a max sessions-per-request guard and a gzip-bomb decompression limit (already `io.LimitReader(gz, maxIngestBytes)`, keep this!).
-- **Browser Auth UX**: When `-auth-token` is enabled and a user opens the dashboard in a browser without a proxy injecting `Authorization`, they get a raw `401 unauthorized`. Optionally support an HTTP-only signed session cookie login form (when `-auth-token` is set) or document the reverse-proxy pattern clearly.
+- **Rate Limiting on `/api/ingest` and `/healthz`**: Add lightweight per-IP token-bucket rate limiting on `/api/ingest` to protect against misbehaving clients or accidental loops.
+- **Optional Browser Login Page for `-auth-token`**: When `-auth-token` is set and a user visits `/` in a browser without a reverse proxy injecting `Authorization`, serve a minimal login form that sets an `HttpOnly; SameSite=Strict; Secure` session cookie instead of a raw `401 unauthorized`.
+- **Audit Log for Admin/Ingest Rejections**: Log structured `WARN` events (rate-limited) on repeated `401`s or oversized `/api/ingest` payloads.
 
 ### Change
-- **`/api/models` Auth Alignment**: Ensure `/api/models` stays behind `WithAuth` (it already is, since only `/healthz` is exempt in `auth.go`), and validate that `s.ModelsPath` is strictly the configured file path (no user-controlled path).
-- **CSP Tightening Audit**: Keep the per-response nonce and `escapeHtml` discipline (`jsxss_regress_test.go`). Avoid adding any inline event handlers or third-party CDNs.
+- **Strict Gzip Decompression Ratio Guard**: `handleIngest` limits decompressed JSON to `32 MiB` via `io.LimitReader(gz, maxIngestBytes)`, which is solid; also return `413 Request Entity Too Large` explicitly when `MaxBytesReader` or the limit is hit instead of a generic `invalid json: unexpected EOF`.
 
 ### Remove
-- **`X-Auth-Token` Query/Header Ambiguity**: Keep `Authorization: Bearer` and `X-Auth-Token` headers only; never accept tokens in URL query parameters (already avoided, keep it that way).
+- **Plaintext Token in `com.dashd.push.plist` Example**: Document reading `DASHD_INGEST_TOKEN` from a `0600` file or Keychain rather than pasting it directly into a world-readable plist where possible.
 
 ---
 
-## 4. Agent (`cmd/dashd/push.go`, `internal/scan/scan.go`, `internal/source/`)
+## 4. Agent (`cmd/dashd/push.go`, `internal/scan/scan.go`)
 
 ### Develop
-- **Batched `POST /api/ingest` Flushes**: Currently `remoteSink.RecomputeSession(uid)` sends one HTTP POST per changed session file. On an initial cold push of 450+ files, that's 450+ sequential HTTP requests. Batching up to N sessions (e.g., 25 sessions or 2 MiB uncompressed) per `POST /api/ingest` while only advancing `scan_state` cursors for the sessions in a successful batch will make initial pushes 10x–20x faster.
-- **Exponential Backoff & Offline Resilience**: If the remote server is unreachable (e.g., laptop offline / Tailnet down), `dashd push` retries every `-interval` (30s) and logs errors. Add jittered exponential backoff (capped at e.g. 5m) and clean structured logging (`"remote unreachable, will retry"`).
-- **`dashd push status` / `dashd doctor` Subcommand**: A quick diagnostic command that checks local agent log directories, `models.json` status, `push-state.db` cursor counts, and connectivity/auth against `-remote`.
-- **Self-Update Command (`dashd self-update`)**: Optional command to check GitHub Releases and replace the local binary (especially helpful on Windows/macOS where there's no package manager).
+- **Batched `POST /api/ingest` Flushes**: Currently `remoteSink.RecomputeSession(uid)` sends one HTTP POST per changed session file. On a cold initial push of 450+ files, that's 450+ sequential requests. Batching up to 25 sessions per `POST /api/ingest` (and deferring `SaveScanState` until the batch succeeds) will make initial syncs 10x–20x faster.
+- **Exponential Backoff on Remote Failure**: When the remote server is unreachable (laptop offline / Tailnet down), `dashd push` retries every `-interval` (30s). Add jittered exponential backoff (capped at 5m) and reset on success.
+- **`dashd doctor` Subcommand**: A diagnostic command that checks local agent log directories, `models.json` path/age, `push-state.db` cursor counts, and connectivity/auth against `-remote`.
+- **`dashd self-update` Subcommand**: Download and atomically replace the running binary from GitHub Releases (especially useful on Windows/macOS).
 
 ### Change
-- **Session UID Namespacing Across Machines**: `session.uid` is currently the table's `PRIMARY KEY`. While UUID-based sessions won't collide across machines, date/ordinal-based UIDs (e.g. `session-1` or identical fixture/test filenames) on two machines would overwrite each other on the central server. Consider keying `session` by `(machine, uid)` or prefixing `uid` on remote ingest when `machine != ""` (while keeping `/session?uid=...` clean).
-- **Cursor State Isolation**: `dashd push` defaults `-db` to `~/.local/share/dashd/dashboard.db` unless overridden. Give `push` its own default path (`~/.local/share/dashd/push-state.db`) so running `dashd scan` and `dashd push` on the same machine never share/interfere with each other's cursors.
+- **Cross-Machine `session.uid` Collision Safety**: `session.uid` is the primary key in `session`. While UUIDs won't collide, date/ordinal-based UIDs on two machines could overwrite each other on the central server. Namespace `session.uid` by `machine` on ingest (or key `session` by `(machine, uid)`).
+- **Periodic Empty Heartbeat**: If no files changed during a `push` pass, `remoteSink` currently makes zero HTTP calls—meaning `Connected Machines` only updates when a session changes. Send a lightweight empty heartbeat every ~5 minutes so idle machines still show as online.
 
 ### Remove
-- **Local `Scanner` Errors on `context.Canceled` During Shutdown**: Notice in `journalctl` during `systemctl --user restart dashd-push`, stopping mid-pass logged `level=ERROR msg="source scan failed" error="context canceled"`. Treat `context.Canceled` during shutdown as `INFO`/`DEBUG`, not `ERROR`.
+- **Redundant `models.json` Copy in `install.sh` / `install.ps1` When `update-models` Succeeds**: Minor, keep release `models.json` as offline fallback.
 
 ---
 
 ## 5. Server (`cmd/dashd/main.go`, `internal/web/ingest.go`, `Dockerfile`, `docker-compose.yml`)
 
 ### Develop
-- **Auto-Reprice on Server `models.json` Refresh**: When the server runs with `-models-refresh 24h` and downloads updated pricing, optionally run `Store.Reprice` automatically (or expose a `POST /api/reprice` admin action) so historical unpriced calls get priced as soon as OpenRouter adds new models.
-- **Per-Machine Heartbeat / Last-Seen Tracking**: Record a `machine_status` row `(machine, last_seen_at, agent_version, calls_pushed)` on each `POST /api/ingest` (even when `sessions` is empty, as a lightweight heartbeat) so the **System** tab shows every connected machine, its version, and when it last checked in.
-- **Prometheus `/metrics` Endpoint (Optional)**: Export `dashd_calls_total`, `dashd_cost_usd_total`, `dashd_tokens_total`, and `dashd_last_push_timestamp` for homelab Grafana setups.
+- **Auto-Reprice After Server `models.json` Refresh**: When `runModelsRefresher` updates `models.json` on the server, optionally run `Store.Reprice` so previously unpriced calls are retroactively priced.
+- **Prometheus `/metrics` Endpoint**: Optional metrics (`dashd_calls_total`, `dashd_cost_usd_total`, `dashd_tokens_total`, `dashd_machine_last_seen_seconds`) for Grafana/Prometheus monitoring.
 
 ### Change
-- **Docker Compose Default Env & Healthcheck**: Add a `healthcheck` block to `docker-compose.yml` hitting `http://127.0.0.1:8753/healthz`, and allow `DASHD_AUTH_TOKEN` to be optional in `docker-compose.yml` (with a clear comment) for Tailnet-only deployments like `dashd.boa-hake.ts.net`.
-- **SQLite Write Contention Under Multi-Agent Load**: `handleIngest` writes directly to `s.store` from HTTP handlers. With multiple machines pushing concurrently, `SetMaxOpenConns(4)` + `busy_timeout(10000)` works, but routing all writes through a single serialized writer channel/queue inside `Server` eliminates `SQLITE_BUSY` retries under bursty concurrent pushes.
+- **Log Resolved `models.json` Path on Startup**: Log the exact resolved path at `INFO` level on startup so Docker/systemd users can immediately verify which price dump is loaded.
 
 ### Remove
-- **Redundant `models.json` Discovery Confusion**: Simplify `defaultModelsPath()` documentation and log the resolved absolute path on startup so container/systemd users immediately see which `models.json` is active.
+- **In-Process `5000` Session Cap in `buildPayload`**: Currently `st.Sessions(ctx, filter, 5000)` embeds up to 5,000 sessions inline into `window.dashboardData` on every `GET /`. Move **All Sessions** to a paginated `/api/sessions` endpoint so initial page loads stay fast past 10,000+ sessions.
 
 ---
 
 ## 6. Installation (`packaging/install.sh`, `packaging/install.ps1`, `.goreleaser.yml`)
 
 ### Develop
-- **Upgrade Mode in `install.sh` / `install.ps1`**: Add `--upgrade` (or detect existing `~/.config/dashd/push.env` / Task Scheduler task) so users can update the binary in-place without re-entering their server URL, token, and machine name.
-- **Uninstall Script / Flag (`--uninstall`)**: Cleanly stop/disable the `systemd --user` unit, `launchd` plist, or Windows Scheduled Task and optionally remove binaries/state.
-- **Homebrew Tap / AUR `PKGBUILD`**: Since the user is on CachyOS (Arch-based) and supports macOS, publishing a `PKGBUILD` (AUR) and Homebrew formula alongside `.goreleaser.yml` would make upgrades native (`paru -S dashd` / `brew upgrade dashd`).
+- **`-Upgrade` and `-Uninstall` in `install.ps1`**: Bring Windows PowerShell installer to parity with `install.sh`'s `--upgrade` and `--uninstall` flags.
+- **AUR `PKGBUILD` & Homebrew Formula**: Publish native packages for Arch/CachyOS (`paru -S dashd`) and macOS (`brew install tonym128/tap/dashd`).
 
 ### Change
-- **`packaging/dashd-push.service` & `com.dashd.push.plist` Consistency**: Ensure both static templates include `-models` and `-models-refresh 24h` (updated in `dashd-push.service`; verify `com.dashd.push.plist` matches).
-- **Release Tagging Discipline**: Ensure `.goreleaser.yml` builds `windows/arm64` if needed (currently ignored) or document `windows/amd64` only.
+- **`windows/arm64` Build in `.goreleaser.yml`**: Remove the `windows/arm64` ignore entry so Snapdragon Windows laptops get a native binary too.
 
 ### Remove
-- **`update_models.py` Dependency in Docs/Errors**: Error messages in `cmd/dashd/main.go` and `internal/source/pricing.go` still tell users `"run python3 update_models.py"`. Now that `dashd update-models` is built into the Go binary, update those messages to recommend `dashd update-models` (and keep `update_models.py` only as a repo dev helper or remove it).
+- **`update_models.py` Script**: Now that `dashd update-models` is built into the Go binary, `update_models.py` is redundant outside legacy dev workflows and can be removed or moved to `scripts/`.
 
 ---
 
 ## 7. Data (`internal/model/`, `internal/store/`, `internal/source/`)
 
 ### Develop
-- **Retention / Compaction Policy (Optional)**: Storing every individual `call` row is great for accuracy, but after 1M+ calls the SQLite DB grows. Adding an optional `dashd vacuum` / `dashd prune --before YYYY-MM-DD` (or rollup-only archiving) keeps long-lived servers fast.
-- **Orphaned Session Handling for Remote Machines**: On a remote server, `ClearOrphaned` / `MarkOrphaned` shouldn't mark pushed sessions from other machines as orphaned just because those paths don't exist on the server. Ensure `serve` mode never runs local orphan-sweeping on remote-machine sessions.
-- **Data Integrity Check (`dashd stats --verify`)**: Report unpriced models by name + call count, calls with `ts = 0`, and per-machine row counts in `dashd stats`.
+- **Retention / Compaction (`dashd prune --before YYYY-MM-DD`)**: Allow pruning raw `call` / `tool_call` rows older than a retention cutoff (with `VACUUM`) for very large long-running servers.
+- **Unpriced Model Breakdown (`dashd stats --unpriced`)**: List every unpriced model name and its call count so users know exactly which models need rates.
 
 ### Change
-- **Store `agent_version` and `ingest_ts`**: Recording when the server ingested a call (`ingested_at`) helps debug clock skew or delayed offline laptop pushes.
-- **Backfill / Label Empty `machine` Values**: Legacy rows from before `v6Machine` have `machine = ''`. In queries/facets, optionally map `''` to `"local"` (or surface `"unassigned"`) so legacy sessions aren't invisible when filtering by machine.
+- **Prevent Orphan Sweeps on Remote Sessions**: Ensure `markVanished` only marks sessions belonging to the local machine (or never runs in `serve`-only mode) so remote-pushed sessions are never flagged orphaned just because their file paths don't exist on the server.
+- **Record `ingested_at` Timestamp**: Track when the server received a call (`ingested_at`) alongside `ts` to help debug clock skew or delayed offline laptop pushes.
 
 ### Remove
-- **Hardcoded Fallback Drift**: `internal/source/manual_pricing.json` requires manual edits whenever new models launch. Keep it as a minimal emergency floor, and rely on `dashd update-models` + `-models-refresh` + server→client sync as the primary mechanism.
+- **Legacy Pre-v6 Empty `machine` Ambiguity**: In `Store.Facets` / `Machines()`, include `'local'` when empty `machine` rows exist so legacy local sessions remain filterable alongside named machines.
 
 ---
 
 ## 8. Reporting (`internal/web/burnrate.go`, `activity.go`, `render.go`)
 
 ### Develop
-- **Cache Efficiency & Savings Metrics**: Surface **Cache Hit Rate** (`cache_read / (input + cache_read + cache_write)`) and estimated **Cache Savings ($)** on the Overview stat cards and per-model breakdown—this is one of the highest-signal cost-optimization metrics for coding agents.
-- **Per-Machine & Per-Project Cost Comparison**: Add a **Machines** tab/table under Breakdowns and allow comparing spend across machines (e.g. `cachiest` vs `macbook` vs `work-vm`).
-- **Budget Alerts / Thresholds**: Allow setting a daily/monthly soft budget (`-daily-budget 20`, `-monthly-budget 300`) that highlights burn-rate cards in red when projected spend exceeds budget, and optionally exposes status on `/healthz` or webhook.
-- **Weekly / Monthly Rollup View**: Daily Spending shows individual days + month separators; adding a **Weekly** and **Monthly** toggle makes multi-month trends much easier to read.
+- **Weekly & Monthly Spending Rollup Toggle**: Add a `Daily | Weekly | Monthly` toggle on the Daily Spending chart for long-term trend analysis.
+- **Estimated Cache Savings ($)**: Pair `Cache hit %` with estimated dollars saved by cache reads vs. full input pricing.
+- **Budget Thresholds (`-daily-budget`, `-monthly-budget`)**: Highlight burn-rate cards in red when projected spend exceeds configured daily/monthly budgets.
 
 ### Change
-- **Cost-Per-Call & Cost-Per-Session Averages**: Add `Avg $/call` and `Avg $/session` to the Models and Projects breakdown tables to make expensive vs. chatty models obvious.
-- **Timezone Consistency**: Ensure `burnWindows` and `Daily Spending` clearly indicate the server/browser timezone used for day boundaries when aggregating logs pushed from machines in different timezones.
+- **Cost-Per-Call & Cost-Per-Session Columns**: Add `Avg $/call` or `Avg $/session` to Models and Projects tables to distinguish expensive single calls from chatty loops.
 
 ### Remove
-- **Unused/Redundant Payload Fields**: Audit `window.dashboardData` in `render.go` as the database grows (100k+ calls / 1k+ sessions): paginating or lazy-loading `sessions_list` via `/api/sessions` instead of embedding up to 5,000 sessions inline in `index.html` will keep initial page loads fast as multi-machine history scales.
-
----
-
-## Suggested Implementation Order
-
-1. **Quick Wins (High Impact, Low Risk)**:
-   - Update `"run python3 update_models.py"` error messages to `dashd update-models`.
-   - Give `dashd push` its own default `-db` (`push-state.db`) and downgrade shutdown `context.Canceled` scan logs from `ERROR` to `INFO`.
-   - Suppress local `SourcesNeedAction` warning when `serve`-only has remote sessions.
-2. **Agent & Server Scalability**:
-   - Batch `POST /api/ingest` payloads in `remoteSink`.
-   - Add `machine_status` heartbeats and a **Machines** breakdown table in the UI.
-   - Route server writes through a serialized writer queue and paginate `/api/sessions`.
-3. **Reporting & UX Polish**:
-   - Add Cache Hit Rate & Savings metrics, Weekly/Monthly spending toggle, interactive chart tooltips, and searchable filter dropdowns.
-   - Split `-ingest-token` vs `-auth-token` for least-privilege deployments.
+- **Inline 5,000-Session JSON Blob**: Covered under Server/UI pagination (`/api/sessions`).
