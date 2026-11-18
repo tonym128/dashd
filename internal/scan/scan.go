@@ -54,6 +54,29 @@ type SessionSink interface {
 	RecomputeSession(uid string) error
 }
 
+// BatchSink is a SessionSink that buffers writes and commits them in Flush,
+// such as the push client. The scanner saves a file's cursor only after the
+// Flush that carried its data succeeds, so a failed batch is re-read and
+// re-sent on the next pass rather than lost.
+type BatchSink interface {
+	SessionSink
+	Flush() error
+	// Pending is how much is buffered, in the same unit as BatchSize.
+	Pending() int
+	BatchSize() int
+}
+
+// OrphanSink is told about sessions whose log has disappeared, so a remote
+// server can withdraw their transcript links as the local store does.
+type OrphanSink interface {
+	MarkOrphaned(uids []string) error
+}
+
+type deferredState struct {
+	state model.ScanState
+	uid   string
+}
+
 // Config configures a Scanner.
 type Config struct {
 	Store   *store.Store
@@ -89,6 +112,11 @@ type Scanner struct {
 	// lastRun is when a pass last completed, exposed for the status line.
 	lastRun time.Time
 	running bool
+	// lastDuration is how long the most recent pass took, for /metrics.
+	lastDuration time.Duration
+
+	// deferred holds cursors waiting on a BatchSink flush.
+	deferred []deferredState
 }
 
 // New builds a Scanner.
@@ -172,8 +200,18 @@ func (s *Scanner) RunOnce(ctx context.Context) error {
 			"files", vanished)
 	}
 
+	// Anything still buffered (vanished-log notices, a source that ended
+	// mid-batch after an error) goes out before the pass reports done.
+	if err := s.flush(); err != nil {
+		errs = append(errs, err)
+	}
+	s.deferred = nil
+
 	lastRun := s.cfg.Now()
 	s.setLastRun(lastRun)
+	s.statusMu.Lock()
+	s.lastDuration = lastRun.Sub(start)
+	s.statusMu.Unlock()
 	// Quiet when idle. On a short interval a log line per pass buries anything
 	// that matters, and "nothing changed" is the expected case rather than an
 	// event worth reporting.
@@ -226,6 +264,13 @@ func (s *Scanner) Status() (lastRun time.Time, running bool) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
 	return s.lastRun, s.running
+}
+
+// LastDuration is how long the most recent completed pass took.
+func (s *Scanner) LastDuration() time.Duration {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	return s.lastDuration
 }
 
 func (s *Scanner) setRunning(v bool) {
@@ -302,6 +347,10 @@ func (s *Scanner) scanSource(ctx context.Context, src Source, states map[string]
 		}
 		ingested += n
 	}
+	if err := s.flush(); err != nil {
+		s.log.Warn("could not flush batch", "agent", src.Agent, "error", err)
+		failed = append(failed, err)
+	}
 	if len(failed) > 0 {
 		// The first error is kept whole, because it is usually the whole story:
 		// the same fault repeated across every file.
@@ -361,14 +410,51 @@ func (s *Scanner) ingest(path string, prev model.ScanState, parser source.Parser
 	}
 
 	next.Scanned = s.cfg.Now()
-	if err := s.cfg.Store.SaveScanState(next); err != nil {
+	if err := s.commitState(next, sess.UID); err != nil {
 		return 0, fmt.Errorf("save state %s: %w", path, err)
 	}
-	// The log is present again, so whatever had been withdrawn comes back.
-	if err := s.cfg.Store.ClearOrphaned(sess.UID); err != nil {
-		return 0, fmt.Errorf("clear orphan flag %s: %w", sess.UID, err)
-	}
 	return len(sess.Calls), nil
+}
+
+// commitState saves a cursor now, or — for a BatchSink — once the batch that
+// carries its data has been flushed.
+func (s *Scanner) commitState(st model.ScanState, uid string) error {
+	b, ok := s.cfg.Sink.(BatchSink)
+	if !ok {
+		if err := s.cfg.Store.SaveScanState(st); err != nil {
+			return err
+		}
+		// The log is present again, so whatever had been withdrawn comes back.
+		return s.cfg.Store.ClearOrphaned(uid)
+	}
+	s.deferred = append(s.deferred, deferredState{state: st, uid: uid})
+	if b.Pending() >= b.BatchSize() {
+		return s.flush()
+	}
+	return nil
+}
+
+// flush sends a BatchSink's buffer and, only if that succeeded, saves the
+// cursors it covered. On failure they are dropped, so the files are re-read.
+func (s *Scanner) flush() error {
+	b, ok := s.cfg.Sink.(BatchSink)
+	if !ok {
+		return nil
+	}
+	deferred := s.deferred
+	s.deferred = nil
+	if err := b.Flush(); err != nil {
+		return fmt.Errorf("flush batch of %d files: %w", len(deferred), err)
+	}
+	for _, d := range deferred {
+		if err := s.cfg.Store.SaveScanState(d.state); err != nil {
+			return err
+		}
+		if err := s.cfg.Store.ClearOrphaned(d.uid); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sameHead reports whether a file still begins with what the previous pass saw,
@@ -445,10 +531,13 @@ func (s *Scanner) scanOpenCode(ctx context.Context, states map[string]model.Scan
 			return seen, changed, ingested, err
 		}
 		state.Scanned = s.cfg.Now()
-		if err := s.cfg.Store.SaveScanState(state); err != nil {
+		if err := s.commitState(state, sess.UID); err != nil {
 			return seen, changed, ingested, err
 		}
 		ingested += len(sess.Calls)
+	}
+	if err := s.flush(); err != nil {
+		return seen, changed, ingested, err
 	}
 	return seen, changed, ingested, nil
 }
@@ -560,6 +649,11 @@ func (s *Scanner) markVanished(states map[string]model.ScanState) (int, error) {
 	}
 	if err := s.cfg.Store.MarkOrphaned(uids); err != nil {
 		return 0, err
+	}
+	if o, ok := s.cfg.Sink.(OrphanSink); ok && len(uids) > 0 {
+		if err := o.MarkOrphaned(uids); err != nil {
+			return 0, err
+		}
 	}
 	return len(gone), nil
 }

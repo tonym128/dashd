@@ -33,44 +33,75 @@ What the default does not cover:
   paths and costs in queryable form, unencrypted. It is gitignored; keep it that
   way.
 
-`-auth-token` is the way to protect a network-exposed instance: pass a long random
-value and send `Authorization: Bearer <token>` or `X-Auth-Token`. It is
-transport-level only — it does not encrypt traffic, so do not put it on an
-untrusted network without TLS in front.
+### Authentication and roles
 
-### `-auth-token` on the command line is readable by any local user
+A network-exposed instance needs a token, and dashd enforces that: a
+non-loopback `-addr` without `-auth-token` is refused at startup unless
+`-insecure-no-auth` is passed. There are three roles, each with its own token:
 
-This is a real limitation of the current interface, not a caveat about how you
-use it. `dashd` takes the token as a flag and has no other way to receive it: it
-does not read an environment variable, and no flag file exists. A flag value is
-in the process's `argv`, which on Linux is world-readable — `ps aux` shows it to
-every user on the machine, for as long as the process runs.
+| Token | Grants | Give it to |
+|---|---|---|
+| `-ingest-token` | `POST /api/ingest`, `GET /api/models` only | push agents (laptops) |
+| `-auth-token` | the dashboard and its read APIs, plus ingest; also admin when no admin token is set | people, Grafana |
+| `-admin-token` | reprice, prune, forget a session, rename a machine | whoever maintains the server |
 
-So a token passed on the command line protects the dashboard against anyone who
-can reach the *port* and does not protect it against anyone with a shell on the
-*host*. That is usually the right trade for a single-user tool — a local user can
-already read the database file — but it should be a decision rather than a
-surprise.
+`-machine-tokens-file` holds `machine token` lines: each such ingest token may
+only push as its own machine, whatever the request body says, so a stolen
+laptop cannot overwrite another machine's sessions.
 
-What to do about it:
+API clients send `Authorization: Bearer <token>`. Browsers are sent to `/login`,
+which sets a cookie: `HttpOnly`, `SameSite=Strict`, `Secure` over TLS, and an
+HMAC of the token rather than the token itself, so rotating the token signs
+everyone out. A state-changing request authenticated by cookie must also
+carry `X-Dashd-Request`, which a cross-site form cannot send. Failed logins
+are rate limited per address and logged at most once a minute per address.
 
-* **On a machine with other users, keep the default loopback bind.** No token is
-  needed and none is exposed, because nothing can reach the port but you.
-* **Where you must expose it**, generate the token at read time
-  (`-auth-token "$(openssl rand -hex 32)"`) and accept that the host's users can
-  see it, or front the service with a reverse proxy that terminates TLS and does
-  the authentication instead.
-* **`packaging/dashd.service` passes no token, deliberately**, and is commented to
-  say why: it is the loopback arrangement above, where a token would be a secret
-  handed to every local user for no benefit. Its `EnvironmentFile=` comment shows
-  the shape an environment-variable token would take if `cmd/dashd` ever reads
-  one — it does not today, and an `Environment=` line for a variable the binary
-  ignores would be worse than nothing, since it looks like protection that is not
-  there.
+With no token at all, admin endpoints answer only requests from loopback.
 
-Reading the token from the environment (or a root-only file) is a small, contained
-change in `cmd/dashd`, and the reason it is not done yet is that no arrangement
-here needs it.
+### Keeping tokens out of argv
+
+A flag value is in the process's `argv`, which on Linux is readable by every
+local user through `ps`. So:
+
+* Prefer `-auth-token-file`, `-ingest-token-file` and `-admin-token-file`: a
+  file holding only the token, mode 0600 (dashd warns if it is readable by
+  others). The installers write the token this way.
+* `DASHD_AUTH_TOKEN`, `DASHD_INGEST_TOKEN` and `DASHD_ADMIN_TOKEN` also work,
+  and are what `docker-compose.yml` uses.
+* The order is: flag, then file, then environment.
+
+The token is transport-level only. Put TLS in front (Caddy, Tailscale, or
+dashd's own `-tls-cert`/`-tls-key`) before exposing it beyond a trusted
+network; `dashd push` warns when the remote is plain HTTP.
+
+### Browser attacks on a local dashboard
+
+Loopback with no token is safe from the network, but every page the user
+opens runs in a browser on the same machine. Two defences cover that:
+
+* **Cross-site writes.** Any POST whose `Origin` or `Sec-Fetch-Site` says it
+  came from another site is refused, and `/api/ingest` requires
+  `application/json`, which a cross-site "simple" request cannot send. Ingest
+  is also off by default for `serve-and-scan` (`-accept-ingest` turns it on).
+* **DNS rebinding.** With no token, the `Host` header must be an IP literal,
+  `localhost`, `*.localhost`, or a name listed in `-allowed-hosts`.
+
+### Pushed data
+
+The server prices every pushed call itself and derives its calendar day from
+the timestamp, ignoring the client's figures. A session id pushed by a second
+machine is stored as `<machine>::<id>` rather than replacing the first
+machine's session. Machine names are limited to letters, digits, space,
+`.`, `_` and `-`, at most 64 characters. Push agents can strip paths before
+they leave the machine with `-redact-paths home|basename|hash` and
+`-redact-titles`.
+
+### Releases
+
+Release archives are listed in `checksums.txt`, which is signed with cosign
+(keyless, GitHub OIDC). `install.sh`, `install.ps1` and `dashd self-update`
+refuse an archive whose SHA-256 does not match, and `self-update` never
+installs an older version than the running one.
 
 **`-auth-token` is not a mitigation for script running in the page.** It is a
 request header, checked before the response is built. A payload that executes
@@ -98,7 +129,9 @@ template never sees most of it, because the values arrive as JSON and are
 written into the DOM by the script. Every such value must go through the
 script's `escapeHtml`, which escapes all six of `& < > " ' ` — both quotes and
 the backtick. It is defined there and used at every `title=` and `data-*` sink;
-if you add a field, it needs the same treatment.
+`app.js` reuses it. If you add a field, it needs the same treatment. CSV
+exports prefix cells that start with `= + - @` with `'`, so a crafted project
+path cannot become a spreadsheet formula.
 
 Note what the tests on each side actually check, because they are not
 interchangeable:

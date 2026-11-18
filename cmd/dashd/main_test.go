@@ -73,6 +73,7 @@ func TestModelsPathFromNoExecutable(t *testing.T) {
 // pretending to an absolute path that does not exist.
 func TestModelsPathFromNoneFound(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("HOME", root)
 	got := modelsPathFrom(filepath.Join(root, "bin", "dashd"), filepath.Join(root, "work"))
 	if got != "models.json" {
 		t.Errorf("modelsPathFrom() = %q, want %q with no dump anywhere", got, "models.json")

@@ -7,6 +7,139 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Planned as 0.9.0. The database migrates to schema version 10 on first start
+(a copy is written to `dashboard.db.bak-v<old>` first); older binaries refuse
+the migrated database.
+
+### Breaking changes
+
+- **A non-loopback `-addr` without a token is refused** at startup. Set
+  `-auth-token` (or `-auth-token-file`, or `DASHD_AUTH_TOKEN`), bind loopback,
+  or pass `-insecure-no-auth` deliberately.
+- **`X-Auth-Token` is no longer accepted.** API clients send
+  `Authorization: Bearer`; browsers sign in at `/login`, which sets an
+  HttpOnly, SameSite=Strict cookie.
+- **`serve-and-scan` no longer accepts pushes by default.** `serve` still does;
+  otherwise use `-accept-ingest` or set an ingest token.
+- **`docker-compose.yml` requires `DASHD_AUTH_TOKEN` and `DASHD_INGEST_TOKEN`**
+  and refuses to start without them.
+- **Push agents should hold the write-only ingest token**, not the dashboard
+  token. The installers now prompt for and store `-ingest-token-file`.
+- **`/metrics` names changed:** stored totals are gauges (`dashd_cost_usd`,
+  `dashd_calls`, …) because a reprice or prune can lower them.
+- **`update_models.py` is removed**; use `dashd update-models`.
+
+### Security
+
+- Cross-site POSTs are refused (Origin / Sec-Fetch-Site), ingest requires
+  `application/json`, and with no token the Host header must be an IP,
+  `localhost` or a name in `-allowed-hosts` (DNS-rebinding defence). Before
+  this, any web page could write fake sessions into a local dashboard.
+- Roles: ingest (write-only), dashboard, and admin (`-admin-token`) for
+  reprice/prune/forget/rename. Without any token, admin actions are
+  loopback-only. Machine-bound ingest tokens (`-machine-tokens-file`) pin each
+  token to one machine name.
+- Token files (`-auth-token-file`, `-ingest-token-file`, `-admin-token-file`)
+  keep secrets out of argv; failed authentication is logged once a minute per
+  address; error responses no longer echo internal errors.
+- Optional HTTPS with `-tls-cert`/`-tls-key`; `push` warns when the remote is
+  plain HTTP.
+- `self-update` and both installers verify downloads against `checksums.txt`;
+  release `checksums.txt` is signed with cosign (keyless); `self-update` never
+  downgrades.
+
+### Added
+
+- Batched pushes (up to 50 sessions per request, cursors saved only after the
+  batch is accepted), automatic resend when the server's database changes
+  (instance id), `push -resync`, `-redact-paths none|home|basename|hash`,
+  `-redact-titles`, `-auto-update`, `-state-db`, heartbeats that carry the last
+  error, deleted logs reported to the server, and `dashd status`.
+- The server prices every pushed call itself and buckets days in its own
+  timezone (`-tz` / `DASHD_TZ`); `reprice` also re-buckets days.
+- Sessions from two machines with the same id no longer overwrite each other
+  (the second is stored as `<machine>::<uid>`); machine names are validated.
+- `dashd backup`, `dashd export` (CSV/JSON, filter flags), `dashd digest`,
+  filtered `dashd insights -json`, `prune -include-undated -vacuum=false`.
+- Webhook budget alerts and scheduled digests (`-webhook-url`,
+  `-digest-every`), month-end forecast with a range, cache savings in dollars,
+  period comparison with biggest movers, tags/cost centres (`-tags-file`,
+  `?tag=`), `$/call`, `$/1K out` and `$/session` columns.
+- `/api/export` for every table; `/api/sessions` pages, sorts and searches in
+  SQL; admin endpoints `/api/admin/{prune,forget-session,rename-machine}`.
+- Session page: cost by model, tool calls, cumulative cost line, copy resume
+  command, links to the project and machine, arrival lag per call, forget.
+- UI: saved views, auto-refresh, keyboard shortcuts (`?`), onboarding for an
+  empty install, maintenance panel, sign out, machine health and version,
+  timezone label, scroll kept across filter changes, ARIA tabs.
+- Installers: non-interactive flags, prompts that work under `curl | bash`,
+  `--server`, `--version`, Windows arm64, hidden auto-restarting Windows task;
+  `.deb`, `.rpm` and Arch packages, Homebrew and Scoop (when tokens are set),
+  an AUR `PKGBUILD`; CI runs shellcheck, PSScriptAnalyzer and an installer
+  smoke test.
+- Antigravity model 1526 is named (Gemini 4 Hydrogen) and unknown model ids
+  are named from the conversation's own metadata; conversations stored under
+  placeholder names are re-read.
+
+### Fixed
+
+- `prune` left the totals of partly-pruned sessions stale, and a log that
+  still existed could bring pruned calls back; both fixed (prune floor).
+- Burn cards and budgets were computed from the date-filtered rows, so a 7-day
+  filter truncated the 30-day and month cards.
+- `reprice` rewrote every row in memory; it now works in chunks and writes only
+  changed rows.
+- The sessions list silently stopped at 5,000 sessions.
+- Documentation claimed the token could not come from the environment.
+
+## [0.8.0] - 2026-11-18
+
+- `ingested_at` on calls and sessions, `/metrics`, `/api/sessions`,
+  `dashd self-update`, searchable filter popovers, dismissible insights.
+
+## [0.7.1] - 2026-11-18
+
+- Test coverage for doctor, push sync, machine rollups, reprice and
+  `?unpriced=1` (over 80%).
+
+## [0.7.0] - 2026-11-18
+
+- Ingest rate limiting and 413 responses, `dashd prune`, daily/monthly budgets,
+  `?unpriced=1`, CSV export, `POST /api/reprice`.
+
+## [0.6.1] - 2026-11-18
+
+- Month-to-date quick date preset.
+
+## [0.6.0] - 2026-11-18
+
+- Usage insights engine, Overview and Insights tabs, `dashd insights`.
+
+## [0.5.1] - 2026-11-18
+
+- Mobile pass: scrollable tabs, compact table toggle, touch tooltips, larger
+  targets.
+
+## [0.5.0] - 2026-11-18
+
+- `dashd doctor`, push backoff and heartbeats, auto-reprice after a models
+  refresh, weekly/monthly spending, installer parity across platforms.
+
+## [0.4.1] - 2026-11-18
+
+- Remote-only servers show the connected-machine summary instead of "no scan
+  has run yet".
+
+## [0.4.0] - 2026-11-18
+
+- Machine breakdown and heartbeats, split ingest token, cache hit rate,
+  installer `--upgrade`/`--uninstall`.
+
+## [0.3.0] - 2026-11-17
+
+- `dashd update-models`, `-models-refresh`, server-to-client models sync, and
+  the interactive installers.
+
 ## [0.2.0] - 2026-10-19
 
 Every change here is a fix, but the database migrates one way: the first start

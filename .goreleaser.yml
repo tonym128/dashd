@@ -44,18 +44,6 @@ builds:
       - -X main.version={{ .Version }}
       - -X main.commit={{ .FullCommit }}
       - -X main.date={{ .CommitDate }}
-    # NOTE: there is deliberately no `signs:` block here. Release signing and
-    # macOS notarization are out of scope for a personal tool. When they are
-    # wanted, add under this build:
-    #
-    #   signs:
-    #     - cmd: cosign
-    #       certificate: '${ artifact }.pem'
-    #       args: ["sign-blob", "--output-certificate", "${ certificate }",
-    #              "--output-signature", "${ signature }", "${ artifact }"]
-    #       artifacts: checksum
-    #
-    # and a top-level `notarize:` block (goreleaser docs: customization/notarize).
 
 archives:
   - id: default
@@ -87,6 +75,81 @@ archives:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+
+# Keyless signing of checksums.txt with cosign (Sigstore), using the release
+# workflow's GitHub OIDC identity: no key to manage. The installers and
+# `dashd self-update` verify each archive against checksums.txt; anyone can
+# verify checksums.txt itself with
+#   cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
+#     --certificate-identity-regexp 'https://github.com/tonym128/dashd/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    certificate: "${artifact}.pem"
+    signature: "${artifact}.sig"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+
+# Native Linux packages. The package installs the binary and models.json and
+# the systemd units as templates; it enables nothing on its own.
+nfpms:
+  - id: packages
+    ids: [dashd]
+    package_name: dashd
+    vendor: tonym128
+    homepage: https://github.com/tonym128/dashd
+    maintainer: tonym128 <noreply@github.com>
+    description: Self-hosted dashboard of what your coding agents cost.
+    license: MIT
+    formats: [deb, rpm, archlinux]
+    bindir: /usr/bin
+    contents:
+      - src: models.json
+        dst: /usr/share/dashd/models.json
+      - src: packaging/dashd.service
+        dst: /usr/share/dashd/dashd.service.example
+      - src: packaging/dashd-push.service
+        dst: /usr/lib/systemd/user/dashd-push.service
+
+# Homebrew tap and Scoop bucket. Both publish only when their token is
+# configured, so a fork without them still releases cleanly.
+brews:
+  - name: dashd
+    ids: [default]
+    repository:
+      owner: tonym128
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    skip_upload: '{{ if index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
+    homepage: https://github.com/tonym128/dashd
+    description: Self-hosted dashboard of what your coding agents cost.
+    license: MIT
+    install: |
+      bin.install "dashd"
+      pkgshare.install "models.json"
+    caveats: |
+      Prices live in #{opt_pkgshare}/models.json; pass it with
+        dashd -models #{opt_pkgshare}/models.json
+      or run `dashd update-models -models ~/.local/share/dashd/models.json`.
+    test: |
+      system "#{bin}/dashd", "-version"
+
+scoops:
+  - name: dashd
+    ids: [default]
+    repository:
+      owner: tonym128
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    skip_upload: '{{ if index .Env "SCOOP_BUCKET_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
+    homepage: https://github.com/tonym128/dashd
+    description: Self-hosted dashboard of what your coding agents cost.
+    license: MIT
 
 changelog:
   sort: asc
@@ -169,5 +232,5 @@ release:
     non-loopback bind and a token — see the README's container section for the
     verified invocation. Volume is `/var/lib/dashd`, not `/data`.
 
-  # NOTE: signing the release artifacts and notarizing the macOS binaries would
-  # go here, as top-level `signs:` (see the note on the build above).
+  # macOS notarization is not done: the binaries are signed only through the
+  # cosign signature on checksums.txt (see `signs:` above).

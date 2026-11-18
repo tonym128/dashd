@@ -46,7 +46,7 @@ type tableSpec struct {
 var columnLayout = []tableSpec{
 	{
 		table: "sessions-table", tbody: "sessions-tbody", renderer: "renderSessions",
-		columns: "SESSIONS_COLUMNS", payload: "projects[0].sessions_list",
+		columns: "SESSIONS_COLUMNS", payload: "/api/sessions",
 		cols: []column{
 			{"Project / Session", "project", "sesssentinel"},
 			{"Date", "start", "DATESENTINEL"},
@@ -92,6 +92,8 @@ var columnLayout = []tableSpec{
 			{"Reasoning", "reasoning_tokens", "507"},
 			{"Tokens/s", "avg_tps", "50.5"},
 			{"Cost", "cost", "$5.05"},
+			{"$/call", "per_call", "$0.5151"},
+			{"$/1K out", "per_1k_output", "$0.5252"},
 			{"Share", "pct", "55.5%"},
 		},
 	},
@@ -119,6 +121,7 @@ var columnLayout = []tableSpec{
 			{"Tool Time", "tool_time", "TOOLSENTINEL"},
 			{"Tokens/s", "avg_tps", "70.4"},
 			{"Cost", "cost", "$7.07"},
+			{"$/session", "per_session", "$7.17"},
 			{"Last Activity", "last_activity", "ACTSENTINEL"},
 		},
 	},
@@ -159,16 +162,8 @@ func sentinelPayload() map[string]any {
 			"llm_time_display": "LLMSENTINEL", "tool_time_display": "TOOLSENTINEL",
 			"avg_tps": 70.4, "cost": 7.07,
 			"last_activity": 1, "last_activity_display": "ACTSENTINEL",
-			"models": []any{}, "tools": []any{},
-			"sessions_list": []any{map[string]any{
-				"uid": "u1", "cwd": "/w/sesssentinel", "path": "/logs/u1.jsonl",
-				"title": "T", "start": 1, "end": 2, "duration": 61,
-				"start_display": "DATESENTINEL", "end_display": "DATESENTINEL",
-				"duration_display": "DURSENTINEL",
-				"llm_time_display": "LLMSENTINEL", "tool_time_display": "TOOLSENTINEL",
-				"avg_tps":  91.2,
-				"messages": 901, "tokens": 902, "cost": 9.09,
-			}},
+			"per_session": 7.17,
+			"models":      []any{}, "tools": []any{},
 		}},
 		"providers": []any{map[string]any{
 			"name": "PROVIDERNAME", "messages": 401, "tokens": 402,
@@ -181,6 +176,7 @@ func sentinelPayload() map[string]any {
 			"input_tokens": 503, "output_tokens": 504,
 			"cache_read_tokens": 505, "cache_write_tokens": 506,
 			"reasoning_tokens": 507, "avg_tps": 50.5, "cost": 5.05, "pct": 55.5,
+			"per_call": 0.5151, "per_1k_output": 0.5252,
 		}},
 		"tools": []any{map[string]any{
 			"name": "TOOLNAME", "calls": 601,
@@ -188,6 +184,19 @@ func sentinelPayload() map[string]any {
 			"errors": 602, "cost": 6.06,
 		}},
 	}
+}
+
+// sentinelSessions are the rows /api/sessions serves the harness.
+func sentinelSessions() []any {
+	return []any{map[string]any{
+		"uid": "u1", "cwd": "/w/sesssentinel", "path": "/logs/u1.jsonl", "agent_cmd": "pi",
+		"start": 1, "end": 2, "duration": 61,
+		"start_display": "DATESENTINEL", "end_display": "DATESENTINEL",
+		"duration_display": "DURSENTINEL",
+		"llm_time_display": "LLMSENTINEL", "tool_time_display": "TOOLSENTINEL",
+		"avg_tps":  91.2,
+		"messages": 901, "tokens": 902, "cost": 9.09,
+	}}
 }
 
 // sentinelActivity is the /api/activity response the harness serves. The values
@@ -220,7 +229,7 @@ const renderAllBody = `async function () {
         return el === null ? null : el.innerHTML;
     };
     renderProjects();
-    renderSessions();
+    await loadSessions();
     renderProviders();
     renderModels();
     renderTools();
@@ -242,6 +251,7 @@ func renderTables(t *testing.T) map[string]string {
 		Ids:      templateIDs(t),
 		Data:     sentinelPayload(),
 		Activity: sentinelActivity(),
+		Sessions: sentinelSessions(),
 	}, renderAllBody, &out)
 	for name, html := range out {
 		if html == "" {
@@ -593,7 +603,7 @@ func TestEveryEmptyTableSaysWhyItIsEmpty(t *testing.T) {
         models.length = 0;
         tools.length = 0;
         renderProjects();
-        renderSessions();
+        await loadSessions();
         renderProviders();
         renderModels();
         renderTools();
@@ -888,12 +898,10 @@ func jsStringLiteral(s string) string {
 // matches everything looks identical to a working one until someone types.
 //
 // Three rows are supplied and the query matches exactly one, so a predicate
-// that returns true unconditionally fails here.
+// that returns true unconditionally fails here. The search runs on the server;
+// what is under test is that the script sends it and reports the answer.
 func TestSessionsSearchNarrowsTheTable(t *testing.T) {
-	payload := sentinelPayload()
-	row := payload["projects"].([]any)[0].(map[string]any)
-	base := row["sessions_list"].([]any)[0].(map[string]any)
-
+	base := sentinelSessions()[0].(map[string]any)
 	sessions := []any{}
 	for i, cwd := range []string{"/w/needle-match", "/w/other-one", "/w/other-two"} {
 		s := map[string]any{}
@@ -905,13 +913,12 @@ func TestSessionsSearchNarrowsTheTable(t *testing.T) {
 		s["title"] = "t" + itoa(i)
 		sessions = append(sessions, s)
 	}
-	row["sessions_list"] = sessions
 
 	const body = `async function () {
         const search = document.getElementById('sessions-search');
-        const run = q => {
+        const run = async q => {
             search.value = q;
-            renderSessions();
+            await loadSessions();
             return {
                 html: document.getElementById('sessions-tbody').innerHTML,
                 shown: document.getElementById('sessions-shown').textContent,
@@ -919,9 +926,10 @@ func TestSessionsSearchNarrowsTheTable(t *testing.T) {
             };
         };
         return {
-            none: run(''),
-            needle: run('NEEDLE'),
-            absent: run('no-such-string'),
+            none: await run(''),
+            needle: await run('NEEDLE'),
+            absent: await run('no-such-string'),
+            urls: fetched.filter(u => u.startsWith('/api/sessions')),
         };
     }`
 
@@ -929,8 +937,9 @@ func TestSessionsSearchNarrowsTheTable(t *testing.T) {
 		None   renderState `json:"none"`
 		Needle renderState `json:"needle"`
 		Absent renderState `json:"absent"`
+		URLs   []string    `json:"urls"`
 	}
-	runDashboardJS(t, jsConfig{Ids: templateIDs(t), Data: payload}, body, &got)
+	runDashboardJS(t, jsConfig{Ids: templateIDs(t), Data: sentinelPayload(), Sessions: sessions}, body, &got)
 
 	if n := strings.Count(got.None.HTML, "<tr>"); n != 3 {
 		t.Errorf("an empty search rendered %d rows, want all 3", n)
@@ -938,7 +947,6 @@ func TestSessionsSearchNarrowsTheTable(t *testing.T) {
 	if got.None.Count != "3 sessions" {
 		t.Errorf("session count = %q, want %q", got.None.Count, "3 sessions")
 	}
-	// Case-insensitively matching one row, and saying so, is the whole point.
 	if !strings.Contains(got.Needle.HTML, "needle-match") {
 		t.Error("a search matching one session did not render it")
 	}
@@ -947,18 +955,20 @@ func TestSessionsSearchNarrowsTheTable(t *testing.T) {
 			t.Errorf("a search for one session also rendered %s", absent)
 		}
 	}
-	if !strings.Contains(got.Needle.Shown, "1 of 3") {
-		t.Errorf("the shown counter reads %q, want it to report 1 of 3: without that "+
-			"a search that silently matches nothing looks the same as one that matched "+
-			"everything", got.Needle.Shown)
-	}
-	// A search matching nothing must say so rather than showing every row.
-	if strings.Contains(got.Absent.HTML, "other-one") {
-		t.Error("a search matching nothing rendered every session")
+	if !strings.Contains(got.Needle.Shown, "1 match") || !strings.Contains(got.Needle.Shown, "of 1") {
+		t.Errorf("the shown counter reads %q, want it to report the one match", got.Needle.Shown)
 	}
 	if !strings.Contains(got.Absent.HTML, "No sessions match") {
-		t.Errorf("a search matching nothing rendered %q, want an explicit no-match row",
-			got.Absent.HTML)
+		t.Errorf("a search matching nothing rendered %q, want an explicit no-match row", got.Absent.HTML)
+	}
+	sawQuery := false
+	for _, u := range got.URLs {
+		if strings.Contains(u, "q=NEEDLE") && strings.Contains(u, "limit=") && strings.Contains(u, "sort=") {
+			sawQuery = true
+		}
+	}
+	if !sawQuery {
+		t.Errorf("no /api/sessions request carried the search, sort and page size: %v", got.URLs)
 	}
 }
 

@@ -29,13 +29,11 @@
         <string>/usr/local/bin/dashd</string>
         <string>serve-and-scan</string>
         <!--
-          Loopback, and deliberately no -auth-token. A token passed here would be
-          in this agent's argv, readable by any local user through ps, and there
-          is nothing to authenticate on a loopback-only port. dashd reads the
-          flag only: no DASHD_AUTH_TOKEN, no config file, so an entry in the
-          EnvironmentVariables block below would be ignored by the binary. See
-          SECURITY.md for the limitation and for what to do if you need to expose
-          the port.
+          Loopback, and deliberately no token: there is nothing to authenticate
+          on a loopback-only port. To expose it, add -auth-token-file pointing
+          at a 0600 file holding the token; never pass -auth-token here, since
+          argv is readable by any local user through ps. dashd refuses a
+          non-loopback -addr without a token.
         -->
         <string>-addr</string>
         <string>127.0.0.1:8753</string>

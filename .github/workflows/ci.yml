@@ -232,3 +232,41 @@ jobs:
       # models.json) before a tag rather than at release time.
       - run: docker build -t dashd:ci .
       - run: docker run --rm dashd:ci -version
+
+  installers:
+    name: installers (shellcheck, PSScriptAnalyzer, smoke)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: shellcheck install.sh
+        run: shellcheck packaging/install.sh
+      - name: PSScriptAnalyzer install.ps1
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $issues = Invoke-ScriptAnalyzer -Path packaging/install.ps1 -Severity Error,Warning -ExcludeRule PSAvoidUsingWriteHost
+          $issues | Format-Table -AutoSize
+          if ($issues) { exit 1 }
+      - name: Smoke-test install.sh --local non-interactively
+        run: |
+          set -euo pipefail
+          go build -o /tmp/dashd ./cmd/dashd
+          cp models.json /tmp/models.json
+          export HOME="$(mktemp -d)"
+          mkdir -p "$HOME/stub"
+          printf '#!/bin/sh\necho "systemctl $*" >> "$HOME/systemctl.log"\n' > "$HOME/stub/systemctl"
+          chmod +x "$HOME/stub/systemctl"
+          printf 'ci-token-0123456789\n' > "$HOME/token"
+          PATH="$HOME/stub:$PATH" bash packaging/install.sh --local /tmp/dashd \
+            --remote https://dashd.example.com --token-file "$HOME/token" --models-refresh 0 --yes < /dev/null
+          grep -q -- '-ingest-token-file' "$HOME/.config/systemd/user/dashd-push.service"
+          test "$(stat -c %a "$HOME/.config/dashd/ingest.token")" = 600
+          grep -q 'enable --now dashd-push' "$HOME/systemctl.log"
+          ! grep -q 'ci-token' "$HOME/.config/systemd/user/dashd-push.service"

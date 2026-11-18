@@ -1,0 +1,36 @@
+# Maintainer: tonym128 <noreply@github.com>
+#
+# Builds dashd from the tagged source. Update pkgver and run `updpkgsums`
+# (or `makepkg -g`) for each release. Release builds also attach an
+# archlinux package built by goreleaser (nfpms), installable with
+#   sudo pacman -U dashd_<version>_linux_amd64.pkg.tar.zst
+pkgname=dashd
+pkgver=0.9.0
+pkgrel=1
+pkgdesc="Self-hosted dashboard of what your coding agents cost"
+arch=('x86_64' 'aarch64')
+url="https://github.com/tonym128/dashd"
+license=('MIT')
+makedepends=('go')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  export CGO_ENABLED=0 GOFLAGS="-trimpath -mod=readonly -modcacherw"
+  go build -ldflags "-s -w -X main.version=$pkgver" -o dashd ./cmd/dashd
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  go test ./internal/store/ ./internal/source/
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 dashd "$pkgdir/usr/bin/dashd"
+  install -Dm644 models.json "$pkgdir/usr/share/dashd/models.json"
+  install -Dm644 packaging/dashd-push.service "$pkgdir/usr/lib/systemd/user/dashd-push.service"
+  install -Dm644 packaging/dashd.service "$pkgdir/usr/share/dashd/dashd.service.example"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

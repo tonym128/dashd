@@ -190,7 +190,7 @@ func TestSplitAuthAndModelsSync(t *testing.T) {
 	metReq.Header.Set("Authorization", "Bearer ui-secret")
 	metRec := httptest.NewRecorder()
 	handler.ServeHTTP(metRec, metReq)
-	if metRec.Code != http.StatusOK || !strings.Contains(metRec.Body.String(), "dashd_calls_total") {
+	if metRec.Code != http.StatusOK || !strings.Contains(metRec.Body.String(), "dashd_calls ") {
 		t.Fatalf("GET /metrics = %d %s", metRec.Code, metRec.Body.String())
 	}
 

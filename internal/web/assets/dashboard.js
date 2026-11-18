@@ -218,7 +218,7 @@ const dashboardData = window.dashboardData || {};
             const label = showAll
                 ? 'Show last 14 days'
                 : `Show all ${totalDays} days`;
-            html += `<div style="margin-top:12px;text-align:center">
+            html += `<div class="daily-toggle-row">
                 <button data-toggle-daily-chart class="copy-btn">${label}</button>
             </div>`;
         }
@@ -337,9 +337,9 @@ let sessionsPage = 0;
 // drift apart again.
 const SESSIONS_COLUMNS = 10;
 const PROVIDERS_COLUMNS = 11;
-const MODELS_COLUMNS = 11;
+const MODELS_COLUMNS = 13;
 const TOOLS_COLUMNS = 6;
-const PROJECTS_COLUMNS = 9;
+const PROJECTS_COLUMNS = 10;
 const ACTIVITY_COLUMNS = 9;
 
 // An empty tbody is indistinguishable from one that failed to render, and on a
@@ -464,22 +464,6 @@ function sortData(data, sort, accessor) {
         .map(entry => entry.row);
 }
 
-// sessionSortValue is the sort key for one sessions-table column.
-//
-// Two of the columns are not plain fields: Project is the display form of the
-// session's working directory, and Date is an epoch rather than the formatted
-// string the cell shows.
-function sessionSortValue(s, field) {
-    switch (field) {
-        case 'project':
-            return s.cwd || '';
-        case 'start':
-            return Number(s.start) || 0;
-        default:
-            return s[field];
-    }
-}
-
 function renderProjects() {
     const tbody = document.getElementById('projects-tbody');
     if (!tbody) return;
@@ -500,7 +484,7 @@ function renderProjects() {
                 <span class="model-stat" title="${formatFullNumber(m.messages)} msgs">${formatCompactNumber(m.messages)} msgs</span>
                 <span class="model-stat token-wide" title="${escapeHtml(tokenTitle(m))}">${formatCompactNumber(m.tokens)} tok</span>
                 <span class="model-stat token-detail-wide">${escapeHtml(tokenDetailText(m, true))}</span>
-                <span class="model-stat" style="color: var(--accent-blue)">${(m.avg_tps || 0).toFixed(1)} tok/s</span>
+                <span class="model-stat c-blue">${(m.avg_tps || 0).toFixed(1)} tok/s</span>
                 <span class="model-stat cost">$${m.cost.toFixed(2)}</span>
             </div>
         `).join('');
@@ -508,11 +492,11 @@ function renderProjects() {
         // Build tool breakdown HTML
         const toolRows = (p.tools || []).map(t => `
             <div class="model-item">
-                <span class="model-name" style="color: var(--accent-yellow)">${escapeHtml(t.name)}</span>
+                <span class="model-name c-yellow">${escapeHtml(t.name)}</span>
                 <span class="model-stat" title="${formatFullNumber(t.calls)} calls">${formatCompactNumber(t.calls)} calls</span>
-                <span class="model-stat" style="color: var(--accent-yellow)">${t.time_display}</span>
+                <span class="model-stat c-yellow">${t.time_display}</span>
                 <span class="model-stat">avg ${t.avg_time_display}</span>
-                ${t.errors > 0 ? `<span class="model-stat" style="color: var(--accent-red)">${t.errors} errors</span>` : ''}
+                ${t.errors > 0 ? `<span class="model-stat c-red">${t.errors} errors</span>` : ''}
             </div>
         `).join('');
 
@@ -522,20 +506,22 @@ function renderProjects() {
                 <td>${p.sessions}</td>
                 <td title="${formatFullNumber(p.messages)}">${formatCompactNumber(p.messages)}</td>
                 <td class="tokens">${tokenCellHtml(p)}</td>
-                <td style="color: var(--accent-purple)">${p.llm_time_display}</td>
-                <td style="color: var(--accent-yellow)">${p.tool_time_display}</td>
-                <td style="color: var(--accent-blue)">${(p.avg_tps || 0).toFixed(1)}</td>
+                <td class="c-purple">${p.llm_time_display}</td>
+                <td class="c-yellow">${p.tool_time_display}</td>
+                <td class="c-blue">${(p.avg_tps || 0).toFixed(1)}</td>
                 <td class="cost">$${p.cost.toFixed(2)}</td>
-                <td style="color: var(--text-secondary)">${p.last_activity_display}</td>
+                <td class="numeric" title="average cost per session">$${Number(p.per_session || 0).toFixed(2)}</td>
+                <td class="c-muted">${p.last_activity_display}</td>
             </tr>
             <tr class="model-breakdown" id="${rowId}">
                 <td colspan="${PROJECTS_COLUMNS}">
                     <div class="model-tree">
-                        <div class="detail-line"><strong>Path:</strong> ${escapeHtml(p.name)}</div>
+                        <div class="detail-line"><strong>Path:</strong> ${escapeHtml(p.name)}
+                            · <a href="/?project=${encodeURIComponent(p.name)}&view=sessions">Sessions in this project &rarr;</a></div>
                         <div class="detail-line" title="${escapeHtml(tokenTitle(p))}"><strong>Tokens:</strong> ${formatCompactNumber(p.tokens)} ${tokenDetailText(p, true) ? `(${escapeHtml(tokenDetailText(p, true))})` : ''}</div>
-                        <div style="font-weight: 600; margin-bottom: 8px; color: var(--text-secondary)">Models:</div>
-                        ${modelRows || '<div style="color: var(--text-secondary)">No model data</div>'}
-                        ${toolRows ? `<div style="font-weight: 600; margin: 12px 0 8px 0; color: var(--text-secondary)">Tools:</div>${toolRows}` : ''}
+                        <div class="detail-heading">Models:</div>
+                        ${modelRows || '<div class="c-muted">No model data</div>'}
+                        ${toolRows ? `<div class="detail-heading detail-heading-spaced">Tools:</div>${toolRows}` : ''}
                     </div>
                 </td>
             </tr>
@@ -554,57 +540,91 @@ function toggleProjectRow(rowId, trigger) {
     parentRow.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
 }
 
+// Sessions are paged, sorted and searched on the server (/api/sessions), so the
+// page never carries the whole session list and there is no hidden cap. The
+// table header's data-sort names map onto the server's sort keys here.
+const SESSION_SORT_KEYS = {
+    project: 'project', start: 'first', duration: 'wall', llm_time: 'llm',
+    tool_time: 'tool', avg_tps: 'tps', messages: 'calls', tokens: 'tokens',
+    cost: 'cost', errors: 'errors',
+};
+let sessionsRows = [];
+let sessionsTotal = 0;
+let sessionsRequest = 0;
+
+// The page's own filter (everything in the query string that the server's
+// filter understands), so the table always agrees with the rest of the page.
+function currentFilterParams() {
+    const src = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
+    const out = new URLSearchParams();
+    ['model', 'agent', 'project', 'machine', 'tag', 'unpriced', 'date_from', 'date_to'].forEach(k => {
+        src.getAll(k).forEach(v => out.append(k, v));
+    });
+    return out;
+}
+
+function sessionsQueryString() {
+    const params = currentFilterParams();
+    const search = document.getElementById('sessions-search');
+    const q = (search && search.value || '').trim();
+    if (q) params.set('q', q);
+    params.set('sort', SESSION_SORT_KEYS[sessionsSort.field] || 'last');
+    if (sessionsSort.asc) params.set('asc', '1');
+    params.set('limit', String(SESSIONS_PAGE_SIZE));
+    params.set('offset', String(sessionsPage * SESSIONS_PAGE_SIZE));
+    return params.toString();
+}
+
+async function loadSessions() {
+    const tbody = document.getElementById('sessions-tbody');
+    if (!tbody || typeof fetch !== 'function') return;
+    const id = ++sessionsRequest;
+    try {
+        const resp = await fetch('/api/sessions?' + sessionsQueryString(), {
+            headers: { Accept: 'application/json' },
+        });
+        if (!resp.ok) throw new Error('status ' + resp.status);
+        const data = await resp.json();
+        // A slower, older response must not overwrite a newer one.
+        if (id !== sessionsRequest) return;
+        sessionsRows = data.sessions || [];
+        sessionsTotal = data.total || 0;
+    } catch (err) {
+        if (id !== sessionsRequest) return;
+        sessionsRows = [];
+        sessionsTotal = 0;
+        tbody.innerHTML = emptyRow(SESSIONS_COLUMNS, 'Could not load sessions. Try Refresh.');
+        if (typeof window !== 'undefined' && typeof window.showDashdToast === 'function') {
+            window.showDashdToast('Could not load sessions');
+        }
+        return;
+    }
+    renderSessions();
+}
+
 function renderSessions() {
     const tbody = document.getElementById('sessions-tbody');
     if (!tbody) return;
 
-    // Sessions arrive nested under their project; the table is flat, so they are
-    // lifted out here. The project's agent command comes along because that is
-    // what knows how to resume one of its sessions.
-    const allSessions = [];
-    projects.forEach(p => {
-        p.sessions_list.forEach(s => {
-            allSessions.push({...s, agent_cmd: p.agent_cmd});
-        });
-    });
-
-    // Sort sessions using current sort state. sessionSortValue supplies the two
-    // keys that are not plain fields.
-    const sortedSessions = sortData(allSessions, sessionsSort,
-        s => sessionSortValue(s, sessionsSort.field));
-
-    const totalSessions = allSessions.length;
-    document.getElementById('sessions-count').textContent = totalSessions + ' sessions';
-
-    // Search and paging happen here rather than in the browser's own find, so a
-    // few hundred sessions do not become a few hundred DOM rows. The list is
-    // rebuilt on every sort anyway, so the state lives alongside it.
     const searchInput = document.getElementById('sessions-search');
     const shownEl = document.getElementById('sessions-shown');
+    const countEl = document.getElementById('sessions-count');
     const prevBtn = document.getElementById('sessions-prev');
     const nextBtn = document.getElementById('sessions-next');
-    const query = (searchInput?.value || '').trim().toLowerCase();
+    const query = (searchInput?.value || '').trim();
 
-    const matches = s => {
-        if (!query) return true;
-        return [s.cwd, s.path, s.agent_cmd, s.title, s.machine]
-            .some(v => String(v || '').toLowerCase().includes(query));
-    };
-    const visibleSessions = sortedSessions.filter(matches);
-    const totalPages = Math.max(1, Math.ceil(visibleSessions.length / SESSIONS_PAGE_SIZE));
-    sessionsPage = Math.min(Math.max(sessionsPage, 0), totalPages - 1);
-    const pageStart = sessionsPage * SESSIONS_PAGE_SIZE;
-    const pageRows = visibleSessions.slice(pageStart, pageStart + SESSIONS_PAGE_SIZE);
-
+    const totalPages = Math.max(1, Math.ceil(sessionsTotal / SESSIONS_PAGE_SIZE));
+    if (countEl) countEl.textContent = sessionsTotal + ' sessions';
     if (shownEl) {
-        shownEl.textContent = query
-            ? `${visibleSessions.length} of ${totalSessions} match \u201c${searchInput.value.trim()}\u201d`
-            : `${totalSessions} sessions`;
+        const from = sessionsTotal ? sessionsPage * SESSIONS_PAGE_SIZE + 1 : 0;
+        const to = Math.min(sessionsTotal, (sessionsPage + 1) * SESSIONS_PAGE_SIZE);
+        shownEl.textContent = (query ? `${sessionsTotal} match “${query}” · ` : '') +
+            `${from}–${to} of ${sessionsTotal} · page ${sessionsPage + 1} of ${totalPages}`;
     }
     if (prevBtn) prevBtn.disabled = sessionsPage === 0;
     if (nextBtn) nextBtn.disabled = sessionsPage >= totalPages - 1;
 
-    if (!pageRows.length) {
+    if (!sessionsRows.length) {
         tbody.innerHTML = emptyRow(SESSIONS_COLUMNS, query
             ? 'No sessions match this filter.'
             : 'No sessions in this view.');
@@ -612,32 +632,32 @@ function renderSessions() {
     }
 
     let html = '';
-
-    pageRows.forEach(s => {
+    sessionsRows.forEach(s => {
         const sessionUrl = '/session?uid=' + encodeURIComponent(s.uid);
         const resumePath = String(s.path || '').replace(/\\/g, '/');
-        const resumeCmd = buildResumeCmd(s.agent_cmd, s.cwd, resumePath, s.uid);
+        const resumeCmd = buildResumeCmd(s.agent_cmd, s.cwd, resumePath, s.resume_uid || s.uid);
         const sessionName = displayNameFromPath(s.cwd);
         const shortProject = sessionName.length > 40 ? sessionName.slice(0, 37) + '...' : sessionName;
-
         const machineBadge = s.machine ? ` <span class="badge" title="Machine">${escapeHtml(s.machine)}</span>` : '';
+        const titleLine = s.title ? `<div class="session-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>` : '';
 
         html += `
             <tr>
-                <td class="project-name" title="${escapeHtml(s.cwd)}">${escapeHtml(shortProject)}${machineBadge}</td>
-                <td style="color: var(--text-secondary)">${s.start_display}</td>
-                <td style="color: var(--text-secondary)">${s.duration_display}</td>
-                <td style="color: var(--accent-purple)">${s.llm_time_display}</td>
-                <td style="color: var(--accent-yellow)">${s.tool_time_display || '0s'}</td>
-                <td style="color: var(--accent-blue)">${(s.avg_tps || 0).toFixed(1)}</td>
+                <td class="project-name" title="${escapeHtml(s.cwd)}">${escapeHtml(shortProject)}${machineBadge}${titleLine}</td>
+                <td class="c-muted">${s.start_display}</td>
+                <td class="c-muted">${s.duration_display}</td>
+                <td class="c-purple">${s.llm_time_display}</td>
+                <td class="c-yellow">${s.tool_time_display || '0s'}</td>
+                <td class="c-blue">${(s.avg_tps || 0).toFixed(1)}</td>
                 <td title="${formatFullNumber(s.messages)}">${formatCompactNumber(s.messages)}</td>
                 <td class="tokens">${tokenCellHtml(s)}</td>
                 <td class="cost">$${s.cost.toFixed(2)}</td>
                 <td>
                     <button data-copy-resume data-resume-cmd="${escapeHtml(resumeCmd)}" class="icon-btn" title="Copy resume command">Copy</button>
                     ${s.orphaned
-                    ? '<span class="model-stat" title="This session\'s log is no longer on disk; its figures are kept" style="cursor:default">Log gone</span>'
-                    : `<a href="${sessionUrl}" class="session-link" target="_blank" title="View full session">Open \u2192</a>`}
+                    ? '<span class="model-stat" title="This session\'s log is no longer on disk; its figures are kept">Log gone</span>'
+                    : ''}
+                    <a href="${sessionUrl}" class="session-link" title="View the stored calls">Open →</a>
                 </td>
             </tr>
         `;
@@ -654,13 +674,13 @@ function copyResumeCommand(btn) {
     function showSuccess() {
         const originalText = btn.textContent;
         btn.textContent = '✓';
-        btn.style.color = 'var(--accent-green)';
+        btn.classList.add('is-copied');
         if (typeof window !== 'undefined' && typeof window.showDashdToast === 'function') {
             window.showDashdToast('Copied resume command to clipboard');
         }
         setTimeout(() => {
             btn.textContent = originalText;
-            btn.style.color = '';
+            btn.classList.remove('is-copied');
         }, 1500);
     }
 
@@ -702,27 +722,26 @@ function setupSessionsToolbar() {
     const next = document.getElementById('sessions-next');
     if (!search && !prev && !next) return; // Section not rendered
 
-    // Debounced because this re-renders the table: typing should not rebuild
-    // hundreds of rows per keystroke.
+    // Debounced because every change is a request.
     if (search) {
         let timer = null;
         search.addEventListener('input', () => {
             clearTimeout(timer);
             timer = setTimeout(() => {
                 sessionsPage = 0;
-                renderSessions();
-            }, 150);
+                loadSessions();
+            }, 200);
         });
     }
     prev?.addEventListener('click', () => {
         if (sessionsPage > 0) {
             sessionsPage -= 1;
-            renderSessions();
+            loadSessions();
         }
     });
     next?.addEventListener('click', () => {
         sessionsPage += 1;
-        renderSessions();
+        loadSessions();
     });
 }
 
@@ -849,10 +868,10 @@ function renderProviders() {
                 <td class="tokens" title="${formatFullNumber(p.cache_read_tokens)}">${formatCompactNumber(p.cache_read_tokens)}</td>
                 <td class="tokens" title="${formatFullNumber(p.cache_write_tokens)}">${formatCompactNumber(p.cache_write_tokens)}</td>
                 <td class="tokens" title="${formatFullNumber(p.reasoning_tokens)}">${formatCompactNumber(p.reasoning_tokens)}</td>
-                <td style="color: var(--accent-blue)">${(p.avg_tps || 0).toFixed(1)}</td>
+                <td class="c-blue">${(p.avg_tps || 0).toFixed(1)}</td>
                 <td class="cost">$${p.cost.toFixed(2)}</td>
                 <td>
-                    <div class="bar-container" style="width: 100px; display: inline-block; vertical-align: middle;">
+                    <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${p.pct}%"></div>
                     </div>
                     ${p.pct.toFixed(1)}%
@@ -901,10 +920,12 @@ function renderModels() {
                 <td class="tokens" title="${formatFullNumber(m.cache_read_tokens)}">${formatCompactNumber(m.cache_read_tokens)}</td>
                 <td class="tokens" title="${formatFullNumber(m.cache_write_tokens)}">${formatCompactNumber(m.cache_write_tokens)}</td>
                 <td class="tokens" title="${formatFullNumber(m.reasoning_tokens)}">${formatCompactNumber(m.reasoning_tokens)}</td>
-                <td style="color: var(--accent-blue)">${(m.avg_tps || 0).toFixed(1)}</td>
+                <td class="c-blue">${(m.avg_tps || 0).toFixed(1)}</td>
                 <td class="cost">$${m.cost.toFixed(2)}</td>
+                <td class="numeric" title="average cost per call">$${Number(m.per_call || 0).toFixed(4)}</td>
+                <td class="numeric" title="cost per 1,000 generated (output + reasoning) tokens">$${Number(m.per_1k_output || 0).toFixed(4)}</td>
                 <td>
-                    <div class="bar-container" style="width: 100px; display: inline-block; vertical-align: middle;">
+                    <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${m.pct}%"></div>
                     </div>
                     ${m.pct.toFixed(1)}%
@@ -933,7 +954,7 @@ function renderTools() {
     const totalCostAttributed = tools.reduce((sum, t) => sum + (Number(t.cost) || 0), 0);
 
     tbody.innerHTML = sorted.map(t => {
-        const errorStyle = t.errors > 0 ? 'color: var(--accent-red)' : 'color: var(--text-secondary)';
+        const errorClass = t.errors > 0 ? 'c-red' : 'c-muted';
         const share = totalCostAttributed > 0
             ? (Number(t.cost) || 0) / totalCostAttributed * 100
             : 0;
@@ -941,12 +962,12 @@ function renderTools() {
             <tr>
                 <td><span class="model-tag model-other">${escapeHtml(t.name)}</span></td>
                 <td title="${formatFullNumber(t.calls)}">${formatCompactNumber(t.calls)}</td>
-                <td style="color: var(--accent-yellow)">${t.time_display}</td>
-                <td style="color: var(--text-secondary)">${t.avg_time_display}</td>
-                <td style="${errorStyle}">${t.errors}</td>
+                <td class="c-yellow">${t.time_display}</td>
+                <td class="c-muted">${t.avg_time_display}</td>
+                <td class="${errorClass}">${t.errors}</td>
                 <td title="share of attributed cost: ${share.toFixed(1)}%">
                     <span class="cost">$${(Number(t.cost) || 0).toFixed(2)}</span>
-                    <div class="bar-container" style="width: 100px; display: inline-block; vertical-align: middle;">
+                    <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${share.toFixed(1)}%; background: var(--accent-green)"></div>
                     </div>
                 </td>
@@ -959,14 +980,26 @@ function renderTools() {
 setupDelegatedActions();
 setupSessionsToolbar();
 setupSorting('projects-table', projectSort, renderProjects);
-setupSorting('sessions-table', sessionsSort, renderSessions);
+setupSorting('sessions-table', sessionsSort, () => { sessionsPage = 0; loadSessions(); });
 setupSorting('providers-table', providerSort, renderProviders);
 setupSorting('models-table', modelSort, renderModels);
 setupSorting('tools-table', toolSort, renderTools);
 
+// The page can ask for a session ordering, as insight links do (?sort=errors).
+(function () {
+    const q = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
+    const want = q.get('sort');
+    if (!want) return;
+    const field = Object.keys(SESSION_SORT_KEYS).find(k => SESSION_SORT_KEYS[k] === want || k === want);
+    if (field) {
+        sessionsSort.field = field;
+        sessionsSort.asc = q.get('asc') === '1';
+    }
+})();
+
 // Initial render
 renderProjects();
-renderSessions();
+loadSessions();
 renderProviders();
 renderModels();
 renderTools();
@@ -1115,6 +1148,9 @@ updateSortIcons('tools-table', toolSort);
                     escapeHtml(String(err)) + '</div>';
             }
             if (badgeEl) badgeEl.textContent = 'unavailable';
+            if (typeof window !== 'undefined' && typeof window.showDashdToast === 'function') {
+                window.showDashdToast('Could not load activity');
+            }
         }
     }
 
@@ -1443,6 +1479,11 @@ updateSortIcons('tools-table', toolSort);
                 const active = tab.dataset.viewTab === view;
                 tab.classList.toggle('is-active', active);
                 tab.setAttribute('aria-selected', active ? 'true' : 'false');
+                tab.setAttribute('tabindex', active ? '0' : '-1');
+                if (active && tab.id) {
+                    const panel = document.getElementById('main-panel');
+                    if (panel) panel.setAttribute('aria-labelledby', tab.id);
+                }
             });
         }
         if (document.querySelectorAll) {
@@ -1459,7 +1500,11 @@ updateSortIcons('tools-table', toolSort);
     }
 
     let initialView = 'overview';
-    if (typeof location !== 'undefined' && location.hash) {
+    const viewParam = typeof location !== 'undefined'
+        ? new URLSearchParams(location.search).get('view') : null;
+    if (viewParam && validViews.has(viewParam)) {
+        initialView = viewParam;
+    } else if (typeof location !== 'undefined' && location.hash) {
         const h = location.hash.slice(1);
         if (validViews.has(h)) initialView = h;
     } else {
@@ -1475,6 +1520,21 @@ updateSortIcons('tools-table', toolSort);
             const tab = event.target.closest('[data-view-tab]');
             if (tab) setActiveView(tab.dataset.viewTab);
         });
+        // WAI-ARIA tabs: arrow keys, Home and End move between tabs.
+        viewTabsEl.addEventListener('keydown', event => {
+            const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+            if (!keys.includes(event.key) || !viewTabsEl.querySelectorAll) return;
+            const tabs = Array.from(viewTabsEl.querySelectorAll('[data-view-tab]'));
+            const idx = tabs.findIndex(t => t.classList.contains('is-active'));
+            let next = idx;
+            if (event.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+            if (event.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+            if (event.key === 'Home') next = 0;
+            if (event.key === 'End') next = tabs.length - 1;
+            event.preventDefault();
+            setActiveView(tabs[next].dataset.viewTab);
+            if (tabs[next].focus) tabs[next].focus();
+        });
     }
     if (document.addEventListener) {
         document.addEventListener('click', event => {
@@ -1485,7 +1545,7 @@ updateSortIcons('tools-table', toolSort);
 
     // Breakdown sub-tabs (all, models, providers, projects, tools)
     const breakdownTabsEl = document.getElementById('breakdown-tabs');
-    const validBreakdowns = new Set(['all', 'models', 'providers', 'projects', 'machines', 'tools']);
+    const validBreakdowns = new Set(['all', 'models', 'providers', 'projects', 'machines', 'tools', 'tags']);
     function setActiveBreakdown(sub) {
         if (!validBreakdowns.has(sub)) sub = 'all';
         if (breakdownTabsEl && breakdownTabsEl.querySelectorAll) {
@@ -1504,10 +1564,13 @@ updateSortIcons('tools-table', toolSort);
         try { localStorage.setItem('dashd:breakdown', sub); } catch (_) {}
     }
     let initialBreakdown = 'all';
+    const subParam = typeof location !== 'undefined'
+        ? new URLSearchParams(location.search).get('sub') : null;
     try {
         const storedSub = localStorage.getItem('dashd:breakdown');
         if (storedSub && validBreakdowns.has(storedSub)) initialBreakdown = storedSub;
     } catch (_) {}
+    if (subParam && validBreakdowns.has(subParam)) initialBreakdown = subParam;
     setActiveBreakdown(initialBreakdown);
     if (breakdownTabsEl && breakdownTabsEl.addEventListener) {
         breakdownTabsEl.addEventListener('click', event => {
@@ -1538,6 +1601,7 @@ updateSortIcons('tools-table', toolSort);
         ['agent', 'Program'],
         ['project', 'Project'],
         ['machine', 'Machine'],
+        ['tag', 'Tag'],
         ['date_from', 'From'],
         ['date_to', 'To'],
     ].forEach(([key, label]) => {
@@ -1639,6 +1703,14 @@ updateSortIcons('tools-table', toolSort);
                 if (search && search.focus) search.focus();
             } else if (event.key === 'r') {
                 location.reload();
+            } else if (['1', '2', '3', '4', '5'].includes(event.key)) {
+                setActiveView(['overview', 'insights', 'sessions', 'breakdown', 'system'][Number(event.key) - 1]);
+            } else if (event.key === 'f' && filterToggle && filterToggle.click) {
+                filterToggle.click();
+            } else if (event.key === 't' && themeBtn && themeBtn.click) {
+                themeBtn.click();
+            } else if (event.key === '?' && typeof window !== 'undefined' && typeof window.showDashdShortcuts === 'function') {
+                window.showDashdShortcuts();
             } else if (event.key === 'Escape' && filterPanel && !filterPanel.classList.contains('is-collapsed')) {
                 filterPanel.classList.add('is-collapsed');
                 if (filterToggle) filterToggle.setAttribute('aria-expanded', 'false');
@@ -1654,7 +1726,7 @@ updateSortIcons('tools-table', toolSort);
         if (!tbody) return;
         const sorted = sortData(machines, machineSort);
         if (!sorted.length) {
-            tbody.innerHTML = emptyRow(9, 'No machine calls in this view.');
+            tbody.innerHTML = emptyRow(10, 'No machine calls in this view.');
             return;
         }
         tbody.innerHTML = sorted.map(m => `
@@ -1667,8 +1739,9 @@ updateSortIcons('tools-table', toolSort);
                 <td class="numeric tokens" title="${formatFullNumber(m.output_tokens)}">${formatCompactNumber(m.output_tokens)}</td>
                 <td class="numeric tokens" title="${formatFullNumber(m.cache_read_tokens)}">${formatCompactNumber(m.cache_read_tokens)}</td>
                 <td class="numeric cost">$${Number(m.cost || 0).toFixed(2)}</td>
+                <td class="numeric">$${Number(m.per_session || 0).toFixed(2)}</td>
                 <td class="numeric">
-                    <div class="bar-container" style="width: 100px; display: inline-block; vertical-align: middle;">
+                    <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${Number(m.pct || 0)}%"></div>
                     </div>
                     ${Number(m.pct || 0).toFixed(1)}%
@@ -1692,7 +1765,7 @@ updateSortIcons('tools-table', toolSort);
                 .then(h => {
                     if (h && typeof h.calls === 'number' && h.calls > initialCalls) {
                         reloadBtn.textContent = 'Refresh (new data)';
-                        reloadBtn.style.borderColor = 'var(--accent-green)';
+                        reloadBtn.classList.add('has-new-data');
                     }
                 })
                 .catch(() => {});
@@ -1762,70 +1835,6 @@ updateSortIcons('tools-table', toolSort);
                 if (bar) showTip(bar, e.clientX || 20, e.clientY || 80);
                 else hideTip();
             });
-        });
-    }
-
-    // CSV export helpers
-    function downloadCSV(filename, headers, rows) {
-        const csvEscape = v => {
-            const s = String(v == null ? '' : v);
-            return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-        };
-        const lines = [headers.map(csvEscape).join(',')];
-        rows.forEach(r => lines.push(r.map(csvEscape).join(',')));
-        const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    }
-
-    const exportSessionsBtn = document.getElementById('export-sessions-csv');
-    if (exportSessionsBtn && exportSessionsBtn.addEventListener) {
-        exportSessionsBtn.addEventListener('click', () => {
-            const rows = [];
-            (dashboardData.projects || []).forEach(p => {
-                (p.sessions_list || []).forEach(s => {
-                    rows.push([s.cwd, p.agent_cmd, s.machine || '', s.start_display, s.duration, s.llm_time, s.tool_time, s.messages, s.tokens, Number(s.cost || 0).toFixed(4)]);
-                });
-            });
-            downloadCSV('dashd-sessions.csv', ['Project', 'Agent', 'Machine', 'Started', 'Duration(s)', 'LLM(s)', 'Tool(s)', 'Messages', 'Tokens', 'CostUSD'], rows);
-            showToast('Exported ' + rows.length + ' sessions');
-        });
-    }
-
-    const exportModelsBtn = document.getElementById('export-models-csv');
-    if (exportModelsBtn && exportModelsBtn.addEventListener) {
-        exportModelsBtn.addEventListener('click', () => {
-            const rows = (dashboardData.models || []).map(m => [
-                m.name, m.messages, m.tokens, m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_write_tokens, m.reasoning_tokens, Number(m.cost || 0).toFixed(4), Number(m.pct || 0).toFixed(2)
-            ]);
-            downloadCSV('dashd-models.csv', ['Model', 'Messages', 'TotalTokens', 'Input', 'Output', 'CacheRead', 'CacheWrite', 'Reasoning', 'CostUSD', 'SharePct'], rows);
-            showToast('Exported ' + rows.length + ' models');
-        });
-    }
-
-    // Manual reprice trigger in System tab
-    const repriceBtn = document.getElementById('reprice-btn');
-    if (repriceBtn && repriceBtn.addEventListener && typeof fetch === 'function') {
-        repriceBtn.addEventListener('click', () => {
-            repriceBtn.disabled = true;
-            repriceBtn.textContent = 'Repricing...';
-            fetch('/api/reprice', { method: 'POST' })
-                .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
-                .then(res => {
-                    showToast('Repriced ' + (res.repriced || 0) + ' calls');
-                    setTimeout(() => location.reload(), 600);
-                })
-                .catch(() => {
-                    showToast('Reprice failed');
-                    repriceBtn.disabled = false;
-                    repriceBtn.textContent = 'Reprice all calls';
-                });
         });
     }
 

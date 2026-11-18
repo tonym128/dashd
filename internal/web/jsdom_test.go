@@ -153,6 +153,7 @@ function dispatch(type, target) {
   return fns.map(fn => fn({type, target, preventDefault() {}, stopPropagation() {}}));
 }
 
+const fetched = [];
 const sandbox = {
   console,
   document,
@@ -162,9 +163,24 @@ const sandbox = {
     history: { replaceState() {} },
   },
   navigator: {},
-  // The activity IIFE fetches its series on load. The response comes from the
-  // test, so the activity table renderer runs against data the test chose.
-  fetch: async () => {
+  // The activity IIFE fetches its series on load, and the sessions table pages
+  // through /api/sessions. Both answers come from the test. The sessions stub
+  // applies q/limit/offset the way the server does, so the script's paging and
+  // search wiring is exercised end to end; the server's own SQL is tested in Go.
+  fetch: async (url) => {
+    url = String(url);
+    fetched.push(url);
+    if (url.startsWith('/api/sessions')) {
+      const u = new URL(url, 'http://dashd.test');
+      const q = (u.searchParams.get('q') || '').toLowerCase();
+      const rows = (cfg.sessions || []).filter(s => !q ||
+        [s.cwd, s.path, s.agent_cmd, s.title, s.machine]
+          .some(v => String(v || '').toLowerCase().includes(q)));
+      const limit = Number(u.searchParams.get('limit')) || 50;
+      const offset = Number(u.searchParams.get('offset')) || 0;
+      return { ok: true, status: 200, json: async () => ({
+        total: rows.length, limit, offset, sessions: rows.slice(offset, offset + limit) }) };
+    }
     if (!cfg.activity) throw new Error('this test supplied no activity response');
     return { ok: true, status: 200, json: async () => cfg.activity };
   },
@@ -179,6 +195,7 @@ sandbox.window.document = document;
 // mark on an element with none.
 sandbox.elements = elements;
 sandbox.dispatch = dispatch;
+sandbox.fetched = fetched;
 vm.createContext(sandbox);
 
 // A browser exposes location on the global object as well as on window, and the
@@ -214,8 +231,13 @@ type jsConfig struct {
 	Data map[string]any `json:"dashboardData"`
 	// Activity is what /api/activity answers with.
 	Activity map[string]any `json:"activity"`
+	// Sessions are the rows /api/sessions pages and searches over.
+	Sessions []any `json:"sessions"`
 	// Search is window.location.search.
 	Search string `json:"search"`
+	// Extra names further assets (e.g. "app.js") loaded after dashboard.js,
+	// in the same global scope, as the page loads them. Not sent to node.
+	Extra []string `json:"-"`
 }
 
 // runDashboardJS executes assets/dashboard.js in the stub DOM, runs body against
@@ -239,7 +261,11 @@ func runDashboardJS(t *testing.T, cfg jsConfig, body string, out any) {
 			t.Fatal(err)
 		}
 	}
-	write("dashboard.js", readAsset(t, assets, "assets/dashboard.js"))
+	script := readAsset(t, assets, "assets/dashboard.js")
+	for _, extra := range cfg.Extra {
+		script += "\n;\n" + readAsset(t, assets, "assets/"+extra)
+	}
+	write("dashboard.js", script)
 	write("body.js", body)
 	write("js_harness.js", jsHarness)
 	raw, err := json.Marshal(cfg)

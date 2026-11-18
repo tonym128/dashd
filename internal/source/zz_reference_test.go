@@ -136,7 +136,7 @@ func TestAgainstPythonReference(t *testing.T) {
 			//
 			// It used to be compared against Python's own figure with a one-cent
 			// tolerance, which is a claim about two price tables rather than about
-			// this parser: models.json is rewritten by update_models.py, so a
+			// this parser: models.json is rewritten by `dashd update-models`, so a
 			// vendor price change moved the Go figure and broke a test about
 			// reading a protobuf. Python's own figure was computed from whatever
 			// table it loaded at the time, so it cannot be reproduced exactly by a

@@ -62,6 +62,11 @@ func runCLI(argv []string, stdout, stderr io.Writer) int {
 	}
 
 	if err := run(o, command, stdout); err != nil {
+		if errors.Is(err, errRestart) {
+			// A new binary was installed; the supervisor restarts us into it.
+			fmt.Fprintln(stderr, "dashd: restarting into the updated binary")
+			return exitRestart
+		}
 		fmt.Fprintln(stderr, "dashd:", err)
 		return 1
 	}
@@ -69,21 +74,33 @@ func runCLI(argv []string, stdout, stderr io.Writer) int {
 }
 
 func run(o options, command string, stdout io.Writer) error {
-	if o.authToken == "" {
-		o.authToken = os.Getenv("DASHD_AUTH_TOKEN")
-	}
-	if o.ingestToken == "" {
-		o.ingestToken = os.Getenv("DASHD_INGEST_TOKEN")
+	if err := resolveSecrets(&o); err != nil {
+		return err
 	}
 	if o.remote == "" {
 		o.remote = os.Getenv("DASHD_REMOTE")
 	}
-	if command == "push" {
-		if home, err := os.UserHomeDir(); err == nil {
-			defDB := filepath.Join(home, ".local/share/dashd/dashboard.db")
-			if o.db == defDB {
-				o.db = filepath.Join(home, ".local/share/dashd/push-state.db")
-			}
+	if o.webhookURL == "" {
+		o.webhookURL = os.Getenv("DASHD_WEBHOOK_URL")
+	}
+	if o.tz == "" {
+		o.tz = os.Getenv("DASHD_TZ")
+	}
+	if o.tz != "" {
+		loc, err := time.LoadLocation(o.tz)
+		if err != nil {
+			return fmt.Errorf("-tz %q: %w", o.tz, err)
+		}
+		// Every day bucket, date filter and burn window is computed in
+		// time.Local, so setting it here is what makes them agree.
+		time.Local = loc
+	}
+	if command == "push" || command == "status" {
+		// A push agent keeps only cursors locally, in its own database, so it
+		// never mixes with a dashboard database on the same machine. An
+		// explicit -db is still honoured for installs that predate -state-db.
+		if home, err := os.UserHomeDir(); err == nil && o.db == filepath.Join(home, ".local/share/dashd/dashboard.db") {
+			o.db = o.stateDB
 		}
 	}
 
@@ -92,27 +109,30 @@ func run(o options, command string, stdout io.Writer) error {
 		level = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	log.Info("starting", "version", version, "commit", commit, "date", date, "command", command)
+	log.Debug("starting", "version", version, "commit", commit, "date", date, "command", command)
 
-	if command == "update-models" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	switch command {
+	case "update-models":
 		n, err := source.UpdateModels(ctx, source.OpenRouterModelsURL, o.models)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "updated %s (%d models)\n", o.models, n)
 		return nil
-	}
-	if command == "doctor" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
+	case "doctor":
 		return runDoctor(ctx, o, stdout)
+	case "self-update":
+		_, err := runSelfUpdate(ctx, stdout)
+		return err
 	}
-	if command == "self-update" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		return runSelfUpdate(ctx, stdout)
+
+	if command == "serve" || command == "serve-and-scan" {
+		if err := checkExposure(o); err != nil {
+			return err
+		}
 	}
 
 	// The store reports a database it could not chmod 0600 through this hook,
@@ -127,9 +147,45 @@ func run(o options, command string, stdout io.Writer) error {
 	}
 	defer st.Close()
 
-	// The pricer is built before the command switch on purpose: every command
-	// that costs anything needs it, so this is the single place the fallback
-	// warning can be — once per process, for scan, reprice, stats and serve.
+	switch command {
+	case "status":
+		return runStatus(ctx, o, st, stdout)
+	case "backup":
+		if o.out == "" {
+			o.out = o.db + "." + time.Now().Format("20060102-150405") + ".bak"
+		}
+		if err := st.Backup(ctx, o.out); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "backed up %s to %s\n", o.db, o.out)
+		return nil
+	case "export":
+		return runExport(ctx, o, st, stdout)
+	case "stats":
+		return printStats(st, stdout)
+	case "insights":
+		return runInsights(ctx, o, st, stdout)
+	case "digest":
+		return runDigest(ctx, o, st, stdout)
+	case "prune":
+		if o.before == "" {
+			return fmt.Errorf("-before YYYY-MM-DD is required for prune")
+		}
+		cutoff, err := time.ParseInLocation("2006-01-02", o.before, time.Local)
+		if err != nil {
+			return fmt.Errorf("invalid -before date %q: %w", o.before, err)
+		}
+		n, err := st.PruneBefore(ctx, cutoff, store.PruneOptions{IncludeUndated: o.includeUndated, Vacuum: o.vacuum})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "pruned %d calls before %s\n", n, o.before)
+		return nil
+	}
+
+	// The pricer is built here on purpose: every remaining command that costs
+	// anything needs it, so this is the single place the fallback warning can
+	// be — once per process, for scan, reprice, push and serve.
 	pricer, err := source.NewPricer(o.models, "")
 	if err != nil {
 		return fmt.Errorf("%w\n\nPricing is required. Fetch it with:\n  "+
@@ -137,13 +193,23 @@ func run(o options, command string, stdout io.Writer) error {
 	}
 	warnIfFallbackOnly(pricer, o.models, log)
 	log.Debug("pricing configured", "models", o.models)
+	priceFn := func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
+		return pricer.CostCall(m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
+	}
+
+	if command == "reprice" {
+		n, err := st.Reprice(ctx, priceFn)
+		if err != nil {
+			return err
+		}
+		log.Info("repriced", "changed_calls", n, "prices", o.models)
+		return printStats(st, stdout)
+	}
 
 	sources, openCodeDB := scan.DefaultSources(o.home)
 	// The flag wins over the location under -home. It used to be read here and
-	// then thrown away, so a user pointing -opencode at a database elsewhere —
-	// XDG_DATA_HOME, a second install, a copy kept for a colleague — scanned the
-	// default path instead and was shown an empty OpenCode panel with nothing to
-	// indicate that the database they named had never been opened.
+	// then thrown away, so a user pointing -opencode at a database elsewhere
+	// scanned the default path instead and was shown an empty OpenCode panel.
 	if o.opencode != "" {
 		openCodeDB = o.opencode
 	}
@@ -153,11 +219,24 @@ func run(o options, command string, stdout io.Writer) error {
 		if o.remote == "" {
 			return fmt.Errorf("-remote URL (or DASHD_REMOTE) is required for push")
 		}
+		warnInsecureRemote(o.remote, log)
 		pushToken := o.ingestToken
 		if pushToken == "" {
 			pushToken = o.authToken
 		}
-		rsink = newRemoteSink(o.remote, pushToken, o.machine).withModelsSync(o.models, pricer, log)
+		redact, err := parseRedactMode(o.redactPaths)
+		if err != nil {
+			return err
+		}
+		rsink = newRemoteSink(o.remote, pushToken, o.machine).
+			withModelsSync(o.models, pricer, log).
+			withState(st).
+			withRedaction(redact, o.redactTitles)
+		if o.resync {
+			if err := rsink.resetCursors("requested with -resync"); err != nil {
+				return err
+			}
+		}
 		rsink.SyncModels()
 		sink = rsink
 	}
@@ -172,15 +251,12 @@ func run(o options, command string, stdout io.Writer) error {
 		OpenCodeDB: openCodeDB,
 	})
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	switch command {
 	case "scan":
 		// One pass and out, for a machine that would rather be driven by cron
-		// or a systemd timer than by a resident process.
-		// The totals are printed even after a failed pass: the per-source
-		// lines are where the failure is named, and what did go in is real.
+		// or a systemd timer than by a resident process. The totals are
+		// printed even after a failed pass: the per-source lines are where the
+		// failure is named, and what did go in is real.
 		scanErr := scanner.RunOnce(ctx)
 		if err := printStats(st, stdout); err != nil {
 			return errors.Join(scanErr, err)
@@ -189,7 +265,7 @@ func run(o options, command string, stdout io.Writer) error {
 
 	case "push":
 		if o.once || o.interval <= 0 {
-			err := scanner.RunOnce(ctx)
+			err := rsink.runPass(ctx, scanner)
 			if err == nil {
 				fmt.Fprintf(stdout, "pushed %s to %s\n", o.machine, o.remote)
 			}
@@ -198,49 +274,13 @@ func run(o options, command string, stdout io.Writer) error {
 		if o.modelsRefresh > 0 {
 			go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, nil, log)
 		}
+		if o.autoUpdate > 0 {
+			go runAutoUpdater(ctx, o.autoUpdate, log, stop)
+		}
 		log.Info("pushing continuously", "machine", o.machine, "remote", o.remote, "interval", o.interval)
 		runPushLoop(ctx, scanner, rsink, o.interval, log)
-		return nil
-
-	case "reprice":
-		n, err := st.Reprice(ctx, func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
-			return pricer.CostCall(m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
-		})
-		if err != nil {
-			return err
-		}
-		log.Info("repriced", "calls", n, "prices", o.models)
-		return printStats(st, stdout)
-
-	case "prune":
-		if o.before == "" {
-			return fmt.Errorf("-before YYYY-MM-DD is required for prune")
-		}
-		cutoff, err := time.ParseInLocation("2006-01-02", o.before, time.Local)
-		if err != nil {
-			return fmt.Errorf("invalid -before date %q: %w", o.before, err)
-		}
-		n, err := st.PruneBefore(ctx, cutoff)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "pruned %d calls before %s\n", n, o.before)
-		return nil
-
-	case "stats":
-		return printStats(st, stdout)
-
-	case "insights":
-		insights, err := web.BuildInsightsFromStore(ctx, st, store.Filter{}, time.Now())
-		if err != nil {
-			return err
-		}
-		if len(insights) == 0 {
-			fmt.Fprintln(stdout, "No insights yet.")
-			return nil
-		}
-		for _, in := range insights {
-			fmt.Fprintf(stdout, "[%-4s] %-17s %s\n       %s\n", strings.ToUpper(in.Severity), in.Category, in.Headline, in.Detail)
+		if restartRequested.Load() {
+			return errRestart
 		}
 		return nil
 	}
@@ -252,18 +292,38 @@ func run(o options, command string, stdout io.Writer) error {
 	srv.ModelsPath = o.models
 	srv.DailyBudget = o.dailyBudget
 	srv.MonthlyBudget = o.monthlyBudget
-	srv.RepriceFunc = func(rctx context.Context) (int, error) {
-		return st.Reprice(rctx, func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
-			return pricer.CostCall(m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
-		})
+	srv.Version = version
+	srv.TrustProxy = o.trustProxy
+	srv.CachePayloads = true
+	srv.Pricer = priceFn
+	srv.Tags, err = web.LoadTags(o.tagsFile)
+	if err != nil {
+		return err
 	}
+	srv.IngestEnabled = ingestEnabled(o, command)
+	srv.RepriceFunc = func(rctx context.Context) (int, error) { return st.Reprice(rctx, priceFn) }
 	srv.ScanInfo = scanner.Status
+	srv.ScanDuration = scanner.LastDuration
+	srv.AuthEnabled = o.authToken != ""
+	if command == "serve" {
+		// No local scanner: report the last ingest instead.
+		srv.ScanInfo = nil
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	if o.modelsRefresh > 0 {
 		go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, st, log)
+	}
+	if o.webhookURL != "" {
+		go web.RunNotifier(ctx, st, web.NotifierConfig{
+			WebhookURL:    o.webhookURL,
+			DailyBudget:   o.dailyBudget,
+			MonthlyBudget: o.monthlyBudget,
+			DigestEvery:   o.digestEvery,
+			Log:           log,
+		})
 	}
 
 	if command == "serve-and-scan" {
@@ -275,21 +335,38 @@ func run(o options, command string, stdout io.Writer) error {
 		}()
 		// Deferred after the store's Close above, so it runs *before* it on every
 		// exit path, including a listener that failed to bind. The scanner is the
-		// only writer, so it has to be stopped before the database goes away;
-		// otherwise a pass is part-way through its transaction when the
-		// connection closes under it.
+		// only writer, so it has to be stopped before the database goes away.
 		defer func() { waitFor(&scannerDone, log) }()
 	}
 
 	logExposure(o, log)
 
+	machineTokens, err := loadMachineTokens(o.machineTokensFile)
+	if err != nil {
+		return err
+	}
+	// Authentication is a wrapper rather than something the dashboard knows
+	// about, so this file decides policy and web/ stays a dashboard.
+	var handler http.Handler = web.WithAuthConfig(web.AuthConfig{
+		UIToken:       o.authToken,
+		IngestToken:   o.ingestToken,
+		AdminToken:    o.adminToken,
+		MachineTokens: machineTokens,
+		TrustProxy:    o.trustProxy,
+		Log:           log,
+	}, srv.Handler())
+	if o.authToken == "" {
+		// With no token the Host header is the only thing standing between a
+		// DNS-rebinding page and the whole dashboard.
+		handler = web.WithHostCheck(splitList(o.allowedHosts), handler)
+	}
+
 	httpSrv := &http.Server{
-		Addr: o.addr,
-		// Authentication is a wrapper rather than something the dashboard knows
-		// about, so this file decides policy and web/ stays a dashboard.
-		Handler: web.WithSplitAuth(o.authToken, o.ingestToken, log, srv.Handler()),
+		Addr:    o.addr,
+		Handler: handler,
 		// Generous, because a first render over a large history is genuinely
-		// slower than a static page but not unbounded.
+		// slower than a static page but not unbounded. Exports stream and set
+		// their own deadline.
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -299,11 +376,16 @@ func run(o options, command string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", o.addr, err)
 	}
+	scheme := "http"
+	if o.tlsCert != "" {
+		scheme = "https"
+	}
 	log.Info("serving",
-		"url", "http://"+ln.Addr().String(),
+		"url", scheme+"://"+ln.Addr().String(),
 		"version", version,
 		"db", o.db,
 		"scanning", command == "serve-and-scan",
+		"ingest", srv.IngestEnabled,
 		"auth", o.authToken != "",
 		"interval", o.interval,
 		"pid", os.Getpid())
@@ -311,7 +393,13 @@ func run(o options, command string, stdout io.Writer) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if o.tlsCert != "" {
+			err = httpSrv.ServeTLS(ln, o.tlsCert, o.tlsKey)
+		} else {
+			err = httpSrv.Serve(ln)
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
@@ -322,12 +410,9 @@ func run(o options, command string, stdout io.Writer) error {
 	case <-ctx.Done():
 	}
 
-	// Stop accepting requests, let in-flight ones finish, then close the
-	// database. Closing it first would fail whatever a request was still using.
-	// The scanner is stopped by the deferred wait below, after Shutdown returns
-	// and before the store closes.
-	// The scanner is stopped by the deferred wait above, after Shutdown returns
-	// and before the store closes.
+	// Stop accepting requests and let in-flight ones finish. The scanner is
+	// stopped by the deferred wait above, after Shutdown returns and before
+	// the store closes.
 	log.Info("shutting down")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -335,6 +420,39 @@ func run(o options, command string, stdout io.Writer) error {
 		log.Warn("graceful shutdown timed out", "error", err)
 	}
 	return nil
+}
+
+// ingestEnabled decides whether this server accepts pushes. A central
+// `serve` exists to receive them; a local serve-and-scan does not, unless the
+// operator asks or configures an ingest credential.
+func ingestEnabled(o options, command string) bool {
+	return o.acceptIngest || command == "serve" || o.ingestToken != "" || o.machineTokensFile != ""
+}
+
+// checkExposure refuses to publish an unauthenticated dashboard to the
+// network. A warning in a log nobody reads was the old behaviour; Docker's port
+// publishing also bypasses host firewalls, so "it's behind ufw" is not a
+// mitigation either.
+func checkExposure(o options) error {
+	if o.tlsCert != "" && o.tlsKey == "" || o.tlsCert == "" && o.tlsKey != "" {
+		return fmt.Errorf("-tls-cert and -tls-key must be given together")
+	}
+	if !exposedToNetwork(o.addr) || o.authToken != "" || o.insecureNoAuth {
+		return nil
+	}
+	return fmt.Errorf("refusing to serve on %s without -auth-token: that would publish every project path, "+
+		"session title and cost to the network.\n  Set -auth-token (or DASHD_AUTH_TOKEN / -auth-token-file), "+
+		"bind to 127.0.0.1, or pass -insecure-no-auth if this network is trusted", o.addr)
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func runModelsRefresher(ctx context.Context, path string, interval time.Duration, pricer *source.Pricer, st *store.Store, log *slog.Logger) {
@@ -411,17 +529,17 @@ func logExposure(o options, log *slog.Logger) {
 		// Nothing to say. Localhost, no token: the normal case, and a warning
 		// here would train the operator to ignore warnings.
 	case exposed && o.authToken == "":
-		log.Warn("serving on a non-loopback address with NO authentication",
+		log.Warn("serving on a non-loopback address with NO authentication (-insecure-no-auth)",
 			"addr", o.addr,
 			"exposes", "project paths, session titles, model names and per-session cost to anyone who can reach this port",
 			"reachable_from", "every interface on this host, including its public one",
 			"fix", "set -auth-token, or bind to 127.0.0.1 and reach it over an SSH tunnel")
 	case exposed && o.authToken != "":
 		log.Info("serving on a non-loopback address, protected by -auth-token",
-			"addr", o.addr, "accepts", "Authorization: Bearer, or X-Auth-Token",
+			"addr", o.addr, "accepts", "Authorization: Bearer, or a /login cookie",
 			"exempt", "/healthz")
 	default:
-		log.Info("authentication enabled", "accepts", "Authorization: Bearer, or X-Auth-Token",
+		log.Info("authentication enabled", "accepts", "Authorization: Bearer, or a /login cookie",
 			"exempt", "/healthz")
 	}
 }
@@ -553,6 +671,17 @@ func modelsPathFrom(exePath, workDir string) string {
 			if _, err := os.Stat(candidate); err == nil {
 				return candidate
 			}
+		}
+	}
+	// Where the installers and the .deb/.rpm/Homebrew packages put it.
+	var shared []string
+	if home, err := os.UserHomeDir(); err == nil {
+		shared = append(shared, filepath.Join(home, ".local/share/dashd/models.json"))
+	}
+	shared = append(shared, "/usr/share/dashd/models.json", "/usr/local/share/dashd/models.json")
+	for _, candidate := range shared {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
 		}
 	}
 	return "models.json"

@@ -19,13 +19,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonym128/dashd/internal/model"
 	"github.com/tonym128/dashd/internal/store"
 )
 
-//go:embed assets/dashboard.css assets/dashboard.js
+//go:embed assets/dashboard.css assets/dashboard.js assets/app.js assets/session.js
 var assets embed.FS
 
 //go:embed templates/*.html
@@ -38,6 +39,8 @@ type Server struct {
 	tmpl  *template.Template
 	// Generated is injectable so a page can show a stable time in tests.
 	Generated func() time.Time
+	// ScanDuration reports how long the last scan pass took, for /metrics.
+	ScanDuration func() time.Duration
 	// ScanInfo reports scanner state for the status line. Optional.
 	ScanInfo func() (lastRun time.Time, running bool)
 	// HealthCacheTTL is how long /healthz reuses its aggregate. Defaults to
@@ -53,10 +56,42 @@ type Server struct {
 	DailyBudget   float64
 	MonthlyBudget float64
 
-	health        healthCache
-	ingestMu      sync.Mutex
-	ingestLimiter ingestRateLimiter
+	// AuthEnabled shows the Sign out control.
+	AuthEnabled bool
+	// CachePayloads reuses a rendered payload until the data generation
+	// changes (an ingest, an admin write or a completed scan pass) or 30s pass.
+	// Off by default so a test that writes to the store directly sees it.
+	CachePayloads bool
+	// IngestEnabled turns POST /api/ingest on. New sets it; cmd/dashd turns
+	// it off for a local serve-and-scan that has not asked to receive pushes.
+	IngestEnabled bool
+	// Tags groups projects into clients, teams or cost centres for the
+	// Tags breakdown and the ?tag= filter.
+	Tags Tags
+	// Pricer, when set, prices every ingested call on the server, ignoring
+	// whatever cost the client computed.
+	Pricer PriceFunc
+	// Version is reported to push clients.
+	Version string
+	// TrustProxy uses X-Forwarded-For for rate limiting.
+	TrustProxy bool
+	// PruneFunc, BackupFunc power the admin endpoints. Optional.
+	PruneFunc func(ctx context.Context, before time.Time, opt store.PruneOptions) (int64, error)
+
+	health         healthCache
+	ingestMu       sync.Mutex
+	ingestLimiter  rateLimiter
+	ingestCalls    atomic.Int64
+	ingestRequests atomic.Int64
+	generation     atomic.Int64
+	cache          payloadCache
 }
+
+// PriceFunc prices one call from its token counts. out includes reasoning.
+type PriceFunc func(model string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool)
+
+// bumpGeneration invalidates cached page payloads after a write.
+func (s *Server) bumpGeneration() { s.generation.Add(1) }
 
 // New builds a Server.
 func New(st *store.Store, log *slog.Logger) (*Server, error) {
@@ -68,7 +103,8 @@ func New(st *store.Store, log *slog.Logger) (*Server, error) {
 		log = slog.Default()
 	}
 	return &Server{store: st, log: log, tmpl: tmpl, Generated: time.Now,
-		HealthCacheTTL: healthCacheTTL}, nil
+		HealthCacheTTL: healthCacheTTL, IngestEnabled: true,
+		ingestLimiter: rateLimiter{rate: 20, burst: 100}}, nil
 }
 
 // Handler returns the HTTP handler for the dashboard.
@@ -81,13 +117,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/reprice", s.handleReprice)
+	mux.HandleFunc("/api/admin/prune", s.handleAdminPrune)
+	mux.HandleFunc("/api/admin/forget-session", s.handleAdminForgetSession)
+	mux.HandleFunc("/api/admin/rename-machine", s.handleAdminRenameMachine)
 	mux.HandleFunc("/api/sessions", s.handleSessionsAPI)
+	mux.HandleFunc("/api/export", s.handleExport)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.Handle("/session", http.HandlerFunc(s.handleSession))
 	// Outermost, so the headers are on every response the dashboard produces —
 	// including the assets, which is where a policy that only covered documents
 	// would be one bypass away from useless.
-	return withSecurityHeaders(logRequests(s.log, mux))
+	return withSecurityHeaders(withRequestGuards(logRequests(s.log, mux)))
 }
 
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
@@ -106,7 +146,7 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	switch name {
 	case "dashboard.css":
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	case "dashboard.js":
+	case "dashboard.js", "app.js", "session.js":
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	default:
 		http.NotFound(w, r)
@@ -170,7 +210,21 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := s.buildPayload(ctx, filter, r.URL.Query())
+	var data pageData
+	var err2 error
+	gen := ""
+	cached := false
+	if s.CachePayloads {
+		gen = s.dataGeneration()
+		data, cached = s.cache.get(r.URL.RawQuery, gen, time.Now())
+	}
+	if !cached {
+		data, err2 = s.buildPayload(ctx, filter, r.URL.Query())
+		if err2 == nil && s.CachePayloads {
+			s.cache.put(r.URL.RawQuery, gen, time.Now(), data)
+		}
+	}
+	err = err2
 	if err != nil {
 		s.log.Error("could not build dashboard", "error", err)
 		s.errorPage(w, http.StatusInternalServerError, "Could not read the database",
@@ -220,6 +274,10 @@ type pageData struct {
 	Machines          []machineStatusView
 	Insights          []Insight
 	TopInsights       []Insight
+	GeneratedEpoch    int64
+	AuthEnabled       bool
+	// Empty is a fresh install: no calls at all and no filter hiding them.
+	Empty bool
 }
 
 type machineStatusView struct {
@@ -227,9 +285,15 @@ type machineStatusView struct {
 	LastSeenAgo    string
 	SessionsPushed int
 	CallsPushed    int
+	LastError      string
+	LastErrorAgo   string
+	Version        string
+	// Stale is a machine not heard from in over an hour.
+	Stale bool
 }
 
 type facets struct {
+	Tags     []string
 	Models   []string
 	Agents   []string
 	Projects []string
@@ -250,19 +314,22 @@ type scanStatusView struct {
 
 func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query url.Values) (pageData, error) {
 	var totals store.Totals
-	var daily []store.DayBucket
+	var daily, burnDaily []store.DayBucket
 	var models []store.ModelStat
 	var projects []store.ProjectStat
 	var machines []store.MachineStat
 	var tools []store.ToolStat
-	var sessions []store.SessionRow
 	var projectModels []store.ProjectModel
 	var projectTools []store.ProjectTool
 	var modelNames, agentNames, projectNames []string
 	var minTS, maxTS int64
 	var signals store.InsightSignals
+	var comparison map[string]any
 
-	// The page renders eleven rollups; each must observe the same database
+	// A ?tag= filter expands into the projects the tag covers.
+	s.applyTagFilter(ctx, &filter, query)
+
+	// The page renders a dozen rollups; each must observe the same database
 	// state, so they all run inside one read transaction. Under WAL this does
 	// not block the writer, and a scan in progress cannot tear the payload.
 	if err := s.store.ReadTx(ctx, func(st *store.Store) error {
@@ -272,6 +339,17 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		}
 		if daily, err = st.Daily(ctx, filter); err != nil {
 			return err
+		}
+		// The burn cards are about "now" — today, the last 7 and 30 days,
+		// this month — so a date range must not truncate them. Every other
+		// filter still applies.
+		burnDaily = daily
+		if filter.DateFrom != nil || filter.DateTo != nil {
+			bf := filter
+			bf.DateFrom, bf.DateTo = nil, nil
+			if burnDaily, err = st.Daily(ctx, bf); err != nil {
+				return err
+			}
 		}
 		if models, err = st.Models(ctx, filter); err != nil {
 			return err
@@ -285,9 +363,6 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		if tools, err = st.Tools(ctx, filter); err != nil {
 			return err
 		}
-		if sessions, err = st.Sessions(ctx, filter, 5000); err != nil {
-			return err
-		}
 		if projectModels, err = st.ProjectModels(ctx, filter); err != nil {
 			return err
 		}
@@ -298,26 +373,40 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		if err != nil {
 			return err
 		}
-		signals, err = st.InsightSignals(ctx, filter, totals)
+		if signals, err = st.InsightSignals(ctx, filter, totals); err != nil {
+			return err
+		}
+		comparison, err = comparisonJSON(ctx, st, filter, s.Generated())
 		return err
 	}); err != nil {
 		return pageData{}, err
 	}
 
+	now := s.Generated()
+	burn := burnWindows(burnDaily, now)
+	fc := monthForecast(burn, now)
+	savings := cacheSavings(models, s.Pricer)
+	machineViews := s.machineStatusViews(ctx, now)
+
 	// The headline figures sit at the top level rather than under a key: they are
 	// what the stat cards read, and there is one set of them per page.
 	provStats := model.RollupProviders(models, totals.Cost)
 	payload := map[string]any{
-		"generatedEpoch": s.Generated().Unix(),
-		"dailyStats":     dailyJSON(daily),
-		"models":         modelsJSON(models, totals.Cost),
-		"providers":      providersJSON(provStats),
-		"projects":       projectsJSON(projects, sessions, projectModels, projectTools),
-		"machines":       machinesJSON(machines, totals.Cost),
-		"tools":          toolsJSON(tools, totals.ToolSeconds),
-		"unpricedCalls":  totals.UnpricedCalls,
-		"firstActivity":  totals.FirstTS,
-		"lastActivity":   totals.LastTS,
+		"generatedEpoch":  now.Unix(),
+		"dailyStats":      dailyJSON(daily),
+		"models":          modelsJSON(models, totals.Cost),
+		"providers":       providersJSON(provStats),
+		"projects":        projectsJSON(projects, projectModels, projectTools),
+		"machines":        machinesJSON(machines, totals.Cost),
+		"tools":           toolsJSON(tools, totals.ToolSeconds),
+		"tags":            tagsJSON(s.Tags, projects, totals.Cost),
+		"unpricedCalls":   totals.UnpricedCalls,
+		"firstActivity":   totals.FirstTS,
+		"lastActivity":    totals.LastTS,
+		"cacheSavingsUSD": savings,
+		"timezone":        tzName(now),
+		"authEnabled":     s.AuthEnabled,
+		"comparison":      comparison,
 	}
 	for k, v := range totalsJSON(totals) {
 		payload[k] = v
@@ -332,7 +421,8 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	if err != nil {
 		return pageData{}, err
 	}
-	view := facets{Models: modelNames, Agents: agentNames, Projects: projectNames, Machines: machineNames}
+	view := facets{Models: modelNames, Agents: agentNames, Projects: projectNames, Machines: machineNames,
+		Tags: s.Tags.Names()}
 	if minTS > 0 {
 		view.MinDate = time.Unix(minTS, 0).Local().Format("2006-01-02")
 	}
@@ -342,35 +432,85 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 
 	views, _ := s.scanViews(ctx)
 	sources := sourceViews(views)
-	now := s.Generated()
-	burn := burnWindows(daily, now)
-	machineViews := s.machineStatusViews(ctx, now)
-	insights := BuildInsightsWithBudgets(signals, totals, burn, s.DailyBudget, s.MonthlyBudget)
-	topInsights := insights
-	if len(topInsights) > 3 {
-		topInsights = topInsights[:3]
+	insights := BuildInsightsFull(InsightInputs{
+		Signals: signals, Totals: totals, Burn: burn, Forecast: fc,
+		DailyBudget: s.DailyBudget, MonthlyBudget: s.MonthlyBudget,
+		CacheSavings: savings, Machines: machineViews, Query: query, Now: now,
+	})
+	cards := burnCards(burn)
+	if fc.OK {
+		cards = append(cards, forecastCard(fc, s.MonthlyBudget))
 	}
+	stat := statCards(totals)
+	if savings > 0 {
+		for i := range stat {
+			if stat[i].Label == "Total Tokens" {
+				stat[i].Detail = append(stat[i].Detail, statDetail{"Cache saved", fmt.Sprintf("~$%.2f", savings)})
+			}
+		}
+	}
+	burnNoteText := burnNote(burn)
+	if filter.DateFrom != nil || filter.DateTo != nil {
+		burnNoteText += " Burn cards ignore the date range so they always describe now; other filters apply."
+	}
+	burnNoteText += " Days are bucketed in " + tzName(now) + "."
 	return pageData{
 		Generated:      now.Format("2006-01-02 15:04:05"),
-		StatCards:      statCards(totals),
+		GeneratedEpoch: now.Unix(),
+		StatCards:      stat,
 		PayloadJSON:    template.JS(encoded),
 		FilterState:    parseFilterState(query),
 		Facets:         view,
 		Scan:           views,
 		ScanSummary:    scanSummary(views, machineViews),
-		Burn:           burnCards(burn),
-		BurnNote:       burnNote(burn),
+		Burn:           cards,
+		BurnNote:       burnNoteText,
 		Sources:        sources,
 		SourcesSummary: sourceSummary(sources),
 		Machines:       machineViews,
 		Insights:       insights,
-		TopInsights:    topInsights,
+		TopInsights:    topInsights(insights),
+		AuthEnabled:    s.AuthEnabled,
+		Empty:          totals.Calls == 0 && !filterActive(filter),
 		// Shown whenever a local scan ran and a source needs attention, or when
 		// the database holds no calls at all (fresh install). A serve-only
 		// instance receiving remote pushes has no local scan_status rows and
 		// already has calls, so it should not warn about missing local logs.
 		SourcesNeedAction: (len(views) > 0 && anyNeedsAttention(sources)) || totals.Calls == 0,
 	}, nil
+}
+
+func filterActive(f store.Filter) bool {
+	return len(f.Models) > 0 || len(f.Agents) > 0 || len(f.Projects) > 0 || len(f.Machines) > 0 ||
+		f.UnpricedOnly || f.DateFrom != nil || f.DateTo != nil
+}
+
+// topInsights is the Key Insights strip: actionable items first (warn, then
+// tip), falling back to info only when there is nothing to act on.
+func topInsights(all []Insight) []Insight {
+	var out []Insight
+	for _, sev := range []string{"warn", "tip"} {
+		for _, in := range all {
+			if in.Severity == sev {
+				out = append(out, in)
+			}
+		}
+	}
+	if len(out) == 0 {
+		out = all
+	}
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
+}
+
+func tzName(now time.Time) string {
+	name, _ := now.Local().Zone()
+	if loc := time.Local.String(); loc != "" && loc != "Local" {
+		return loc + " (" + name + ")"
+	}
+	return name
 }
 
 func (s *Server) machineStatusViews(ctx context.Context, now time.Time) []machineStatusView {
@@ -384,12 +524,19 @@ func (s *Server) machineStatusViews(ctx context.Context, now time.Time) []machin
 		if r.LastSeenAt > 0 {
 			ago = humanAge(now.Sub(time.Unix(r.LastSeenAt, 0)))
 		}
-		out = append(out, machineStatusView{
+		v := machineStatusView{
 			Machine:        r.Machine,
 			LastSeenAgo:    ago,
 			SessionsPushed: r.SessionsPushed,
 			CallsPushed:    r.CallsPushed,
-		})
+			LastError:      r.LastError,
+			Version:        r.Version,
+			Stale:          r.LastSeenAt > 0 && now.Sub(time.Unix(r.LastSeenAt, 0)) > time.Hour,
+		}
+		if r.LastError != "" && r.LastErrorAt > 0 {
+			v.LastErrorAgo = humanAge(now.Sub(time.Unix(r.LastErrorAt, 0)))
+		}
+		out = append(out, v)
 	}
 	return out
 }
@@ -452,7 +599,9 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	row, ok, err := s.store.Session(ctx, uid)
 	if err != nil {
-		s.errorPage(w, http.StatusInternalServerError, "Could not load session", err)
+		s.log.Error("could not load session", "uid", uid, "error", err)
+		s.errorPage(w, http.StatusInternalServerError, "Could not load session",
+			fmt.Errorf("the database could not be read; see the server log"))
 		return
 	}
 	if !ok {
@@ -462,15 +611,31 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 	calls, err := s.store.SessionCalls(ctx, uid)
 	if err != nil {
-		s.errorPage(w, http.StatusInternalServerError, "Could not load session", err)
+		s.log.Error("could not load session calls", "uid", uid, "error", err)
+		s.errorPage(w, http.StatusInternalServerError, "Could not load session",
+			fmt.Errorf("the database could not be read; see the server log"))
 		return
 	}
+	tools, err := s.store.SessionTools(ctx, uid)
+	if err != nil {
+		s.log.Warn("could not load session tools", "uid", uid, "error", err)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	s.tmpl.ExecuteTemplate(w, "session.html", map[string]any{
-		"Generated": s.Generated().Format("2006-01-02 15:04:05"),
-		"Session":   sessionView(row),
-		"Calls":     callViews(calls),
-	})
+	if err := s.tmpl.ExecuteTemplate(w, "session.html", map[string]any{
+		"Generated":   s.Generated().Format("2006-01-02 15:04:05"),
+		"Session":     sessionView(row),
+		"Calls":       callViews(calls),
+		"ModelSplit":  sessionModelSplit(calls, row.Cost),
+		"Tools":       sessionToolViews(tools),
+		"ToolSummary": sessionToolSummary(tools),
+		"Spark":       sessionSpark(calls),
+		"ResumeCmd":   resumeCommand(row),
+		"ProjectURL":  "/?project=" + url.QueryEscape(row.Project),
+		"MachineURL":  "/?machine=" + url.QueryEscape(row.Machine),
+		"Nonce":       nonceFrom(ctx),
+	}); err != nil {
+		s.log.Error("session template failed", "error", err)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -557,4 +722,50 @@ func parseFilterState(query url.Values) filterState {
 		return filterState{}
 	}
 	return state
+}
+
+// payloadCache keeps the most recent rendered payloads, keyed by the query and
+// the data generation, so repeated page loads between scans skip the dozen
+// rollups a page costs.
+type payloadCache struct {
+	mu      sync.Mutex
+	entries map[string]cachedPayload
+}
+
+type cachedPayload struct {
+	gen  string
+	at   time.Time
+	data pageData
+}
+
+const payloadCacheTTL = 30 * time.Second
+
+func (c *payloadCache) get(key, gen string, now time.Time) (pageData, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok || e.gen != gen || now.Sub(e.at) > payloadCacheTTL {
+		return pageData{}, false
+	}
+	return e.data, true
+}
+
+func (c *payloadCache) put(key, gen string, now time.Time, d pageData) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil || len(c.entries) > 64 {
+		c.entries = map[string]cachedPayload{}
+	}
+	c.entries[key] = cachedPayload{gen: gen, at: now, data: d}
+}
+
+// dataGeneration changes whenever stored data may have: an ingest or admin
+// write bumps the counter, and a completed scan pass moves lastRun.
+func (s *Server) dataGeneration() string {
+	g := fmt.Sprint(s.generation.Load())
+	if s.ScanInfo != nil {
+		last, _ := s.ScanInfo()
+		g += ":" + fmt.Sprint(last.UnixNano())
+	}
+	return g
 }

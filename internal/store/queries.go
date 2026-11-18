@@ -506,6 +506,11 @@ type ProjectStat struct {
 	Sessions int
 	FirstTS  int64
 	LastTS   int64
+	// Summed from the session rows, so the page no longer needs every session
+	// to compute a project's time and token figures.
+	LLMSeconds  float64
+	ToolSeconds float64
+	TotalTokens int64
 }
 
 // Projects returns per-project totals.
@@ -514,7 +519,8 @@ func (s *Store) Projects(ctx context.Context, f Filter) ([]ProjectStat, error) {
 	rows, err := s.q.QueryContext(ctx, `
 		SELECT s.project, s.agent,
 		       COALESCE(SUM(s.cost_usd),0), COALESCE(SUM(s.calls),0),
-		       COUNT(*), COALESCE(MIN(NULLIF(s.first_ts,0)),0), COALESCE(MAX(s.last_ts),0)
+		       COUNT(*), COALESCE(MIN(NULLIF(s.first_ts,0)),0), COALESCE(MAX(s.last_ts),0),
+		       COALESCE(SUM(s.llm_seconds),0), COALESCE(SUM(s.tool_seconds),0), COALESCE(SUM(s.total_tokens),0)
 		FROM session s`+where+`
 		GROUP BY s.project, s.agent
 		ORDER BY MAX(s.last_ts) DESC`, args...)
@@ -526,7 +532,7 @@ func (s *Store) Projects(ctx context.Context, f Filter) ([]ProjectStat, error) {
 	for rows.Next() {
 		var p ProjectStat
 		if err := rows.Scan(&p.Project, &p.Agent, &p.Cost, &p.Calls, &p.Sessions,
-			&p.FirstTS, &p.LastTS); err != nil {
+			&p.FirstTS, &p.LastTS, &p.LLMSeconds, &p.ToolSeconds, &p.TotalTokens); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -824,12 +830,15 @@ type MachineStatus struct {
 	LastSeenAt     int64
 	SessionsPushed int
 	CallsPushed    int
+	LastError      string
+	LastErrorAt    int64
+	Version        string
 }
 
 // MachineStatuses returns all recorded push client heartbeats, newest first.
 func (s *Store) MachineStatuses(ctx context.Context) ([]MachineStatus, error) {
 	rows, err := s.q.QueryContext(ctx, `
-		SELECT machine, last_seen_at, sessions_pushed, calls_pushed
+		SELECT machine, last_seen_at, sessions_pushed, calls_pushed, last_error, last_error_at, version
 		FROM machine_status
 		ORDER BY last_seen_at DESC, machine`)
 	if err != nil {
@@ -839,7 +848,7 @@ func (s *Store) MachineStatuses(ctx context.Context) ([]MachineStatus, error) {
 	var out []MachineStatus
 	for rows.Next() {
 		var m MachineStatus
-		if err := rows.Scan(&m.Machine, &m.LastSeenAt, &m.SessionsPushed, &m.CallsPushed); err != nil {
+		if err := rows.Scan(&m.Machine, &m.LastSeenAt, &m.SessionsPushed, &m.CallsPushed, &m.LastError, &m.LastErrorAt, &m.Version); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -859,63 +868,102 @@ func (s *Store) Reprice(ctx context.Context, price func(model string, in, out, c
 	type row struct {
 		session, key, model             string
 		in, out_, cacheRead, cacheWrite int64
-		cacheWrite1h, reasoning         int64
+		cacheWrite1h, reasoning, ts     int64
+		cost                            float64
+		priced                          bool
+		day                             string
 	}
+	// Processed in keyset-ordered chunks so a database with millions of calls
+	// is never held in memory at once, and only rows whose cost, priced flag
+	// or day actually change are written.
+	//
 	// reasoning_tokens is selected because it is part of the billable output.
 	// Every parser stores OutputTokens as the non-reasoning remainder and
 	// ReasoningTokens as the carved-out slice, and prices the sum at the output
 	// rate (see source.priceGenerated). Pricing output_tokens alone here dropped
 	// the reasoning, so repricing a database whose prices had not changed
-	// *lowered* every total — measured at 12.3% on the committed reference
-	// conversation. Reprice must reproduce the scan-time arithmetic exactly, or
-	// the documented remedy for stale prices is itself a source of wrong money.
-	rows, err := s.q.QueryContext(ctx,
-		`SELECT session_uid, call_key, model, input_tokens, output_tokens,
-		        reasoning_tokens, cache_read_tokens, cache_write_tokens,
-		        cache_write_1h_tokens FROM call`)
-	if err != nil {
-		return 0, err
-	}
-	var all []row
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.session, &r.key, &r.model, &r.in, &r.out_,
-			&r.reasoning, &r.cacheRead, &r.cacheWrite, &r.cacheWrite1h); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		all = append(all, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-
+	// *lowered* every total. Reprice must reproduce the scan-time arithmetic
+	// exactly, or the documented remedy for stale prices is itself a source of
+	// wrong money.
+	//
+	// The day column is re-derived from ts in this process's timezone too, so a
+	// server can re-bucket history pushed by machines in other timezones.
+	const chunk = 5000
 	changed := 0
-	err = s.InTx(func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(
-			`UPDATE call SET cost_usd = ?, priced = ? WHERE session_uid = ? AND call_key = ?`)
-		if err != nil {
-			return err
+	touched := map[string]bool{}
+	lastSession, lastKey := "", ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return changed, err
 		}
-		defer stmt.Close()
-		for _, r := range all {
-			// output + reasoning is the billable generated count: the parsers carve
-			// thinking out of output for display and bill the whole thing.
-			cost, priced := price(r.model, r.in, r.out_+r.reasoning, r.cacheRead, r.cacheWrite, r.cacheWrite1h)
-			if _, err := stmt.Exec(cost, boolInt(priced), r.session, r.key); err != nil {
+		rows, err := s.q.QueryContext(ctx,
+			`SELECT session_uid, call_key, model, input_tokens, output_tokens,
+			        reasoning_tokens, cache_read_tokens, cache_write_tokens,
+			        cache_write_1h_tokens, ts, cost_usd, priced, day FROM call
+			 WHERE (session_uid, call_key) > (?, ?)
+			 ORDER BY session_uid, call_key LIMIT ?`, lastSession, lastKey, chunk)
+		if err != nil {
+			return changed, err
+		}
+		var batch []row
+		for rows.Next() {
+			var r row
+			var priced int
+			if err := rows.Scan(&r.session, &r.key, &r.model, &r.in, &r.out_,
+				&r.reasoning, &r.cacheRead, &r.cacheWrite, &r.cacheWrite1h, &r.ts,
+				&r.cost, &priced, &r.day); err != nil {
+				rows.Close()
+				return changed, err
+			}
+			r.priced = priced != 0
+			batch = append(batch, r)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return changed, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		lastSession, lastKey = batch[len(batch)-1].session, batch[len(batch)-1].key
+
+		err = s.InTx(func(tx *sql.Tx) error {
+			stmt, err := tx.Prepare(
+				`UPDATE call SET cost_usd = ?, priced = ?, day = ? WHERE session_uid = ? AND call_key = ?`)
+			if err != nil {
 				return err
 			}
-			changed++
+			defer stmt.Close()
+			for _, r := range batch {
+				// output + reasoning is the billable generated count.
+				cost, priced := price(r.model, r.in, r.out_+r.reasoning, r.cacheRead, r.cacheWrite, r.cacheWrite1h)
+				day := r.day
+				if r.ts > 0 {
+					day = time.Unix(r.ts, 0).Local().Format("2006-01-02")
+				}
+				if cost == r.cost && priced == r.priced && day == r.day {
+					continue
+				}
+				if _, err := stmt.Exec(cost, boolInt(priced), day, r.session, r.key); err != nil {
+					return err
+				}
+				changed++
+				touched[r.session] = true
+			}
+			return nil
+		})
+		if err != nil {
+			return changed, fmt.Errorf("reprice: %w", err)
 		}
-		return nil
-	})
-	if err != nil {
-		return 0, fmt.Errorf("reprice: %w", err)
+		if len(batch) < chunk {
+			break
+		}
 	}
 	// Session summaries carry their own cost column, so they have to follow.
-	if err := s.RecomputeAllSessions(); err != nil {
-		return 0, fmt.Errorf("reprice summaries: %w", err)
+	for uid := range touched {
+		if err := s.RecomputeSession(uid); err != nil {
+			return changed, fmt.Errorf("reprice summaries: %w", err)
+		}
 	}
 	return changed, nil
 }
@@ -933,6 +981,7 @@ type CallRow struct {
 	LLMSeconds       float64
 	Cost             float64
 	Priced           bool
+	IngestedAt       int64
 }
 
 // SessionCalls returns a session's calls in time order.
@@ -944,7 +993,7 @@ func (s *Store) SessionCalls(ctx context.Context, uid string) ([]CallRow, error)
 	rows, err := s.q.QueryContext(ctx, `
 		SELECT ts, model, input_tokens, output_tokens, cache_read_tokens,
 		       cache_write_tokens, reasoning_tokens, total_tokens, llm_seconds,
-		       cost_usd, priced
+		       cost_usd, priced, ingested_at
 		FROM call WHERE session_uid = ? ORDER BY ts, call_key`, uid)
 	if err != nil {
 		return nil, fmt.Errorf("session calls %s: %w", uid, err)
@@ -956,7 +1005,7 @@ func (s *Store) SessionCalls(ctx context.Context, uid string) ([]CallRow, error)
 		var priced int
 		if err := rows.Scan(&c.TS, &c.Model, &c.InputTokens, &c.OutputTokens,
 			&c.CacheReadTokens, &c.CacheWriteTokens, &c.ReasoningTokens,
-			&c.TotalTokens, &c.LLMSeconds, &c.Cost, &priced); err != nil {
+			&c.TotalTokens, &c.LLMSeconds, &c.Cost, &priced, &c.IngestedAt); err != nil {
 			return nil, err
 		}
 		c.Priced = priced != 0

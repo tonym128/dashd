@@ -91,10 +91,6 @@ func TestWithAuth(t *testing.T) {
 	}{
 		{name: "correct token in Authorization", path: "/", header: map[string]string{"Authorization": "Bearer " + testToken}, want: 200},
 		{name: "lowercase scheme", path: "/", header: map[string]string{"Authorization": "bearer " + testToken}, want: 200},
-		{name: "X-Auth-Token", path: "/", header: map[string]string{"X-Auth-Token": testToken}, want: 200},
-		{name: "X-Auth-Token for a subpath", path: "/session?x=1", header: map[string]string{"X-Auth-Token": testToken}, want: 200},
-		{name: "X-Auth-Token on the JSON API", path: "/api/activity", header: map[string]string{"X-Auth-Token": testToken}, want: 200},
-		{name: "both headers, one right", path: "/", header: map[string]string{"Authorization": "Bearer wrong", "X-Auth-Token": testToken}, want: 200},
 
 		{name: "wrong token", path: "/", header: map[string]string{"Authorization": "Bearer wrong"}, want: 401},
 		{name: "token is a prefix of the real one", path: "/", header: map[string]string{"Authorization": "Bearer " + testToken[:20]}, want: 401},

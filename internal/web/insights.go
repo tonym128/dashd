@@ -31,10 +31,68 @@ func BuildInsights(sig store.InsightSignals, totals store.Totals, burn []burnWin
 // BuildInsightsWithBudgets behaves like BuildInsights and also flags daily or
 // monthly budget overruns when positive budgets are configured.
 func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, burn []burnWindow, dailyBudget, monthlyBudget float64) []Insight {
-	if totals.Calls == 0 {
-		return nil
+	return BuildInsightsFull(InsightInputs{Signals: sig, Totals: totals, Burn: burn,
+		DailyBudget: dailyBudget, MonthlyBudget: monthlyBudget})
+}
+
+// InsightInputs is everything the insight engine reads.
+type InsightInputs struct {
+	Signals       store.InsightSignals
+	Totals        store.Totals
+	Burn          []burnWindow
+	Forecast      forecast
+	DailyBudget   float64
+	MonthlyBudget float64
+	CacheSavings  float64
+	Machines      []machineStatusView
+	// Query is the page's current filter, kept on action links so following
+	// an insight narrows the view rather than resetting it.
+	Query url.Values
+	Now   time.Time
+}
+
+// withQuery merges extra parameters into the current filter query.
+func withQuery(base url.Values, extra map[string]string) string {
+	q := url.Values{}
+	for k, v := range base {
+		if k == "view" || k == "sort" || k == "asc" {
+			continue
+		}
+		q[k] = append([]string(nil), v...)
+	}
+	for k, v := range extra {
+		q.Set(k, v)
+	}
+	return "/?" + q.Encode()
+}
+
+// BuildInsightsFull is the insight engine.
+func BuildInsightsFull(in InsightInputs) []Insight {
+	sig, totals, burn := in.Signals, in.Totals, in.Burn
+	dailyBudget, monthlyBudget := in.DailyBudget, in.MonthlyBudget
+	if in.Now.IsZero() {
+		in.Now = time.Now()
 	}
 	var out []Insight
+
+	// Machines whose push agent reports a failure, or that went quiet, come
+	// first: their data is missing from everything below.
+	for _, m := range in.Machines {
+		if m.LastError != "" {
+			out = append(out, Insight{
+				ID:          "machine-failing-" + m.Machine,
+				Category:    "Machines & Health",
+				Severity:    "warn",
+				Headline:    fmt.Sprintf("%s is failing to push (%s)", m.Machine, m.LastErrorAgo),
+				Detail:      "Last error: " + m.LastError + ". Its newest sessions are missing from these totals; run `dashd status` on that machine.",
+				ActionLabel: "Open System tab",
+				ActionURL:   withQuery(in.Query, map[string]string{"view": "system"}),
+			})
+		}
+	}
+	if totals.Calls == 0 {
+		return out
+	}
 
 	// 0. Budget threshold alerts (when configured).
 	for _, b := range burn {
@@ -58,6 +116,26 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 		}
 	}
 
+	if monthlyBudget > 0 && in.Forecast.OK && in.Forecast.Projected > monthlyBudget {
+		var overNow bool
+		for _, b := range burn {
+			overNow = overNow || (b.Label == "Month to date" && b.Cost > monthlyBudget)
+		}
+		if !overNow {
+			out = append(out, Insight{
+				ID:       "monthly-forecast-over",
+				Category: "Cost & Burn",
+				Severity: "warn",
+				Headline: fmt.Sprintf("This month is on track for $%.2f, over your $%.2f budget", in.Forecast.Projected, monthlyBudget),
+				Detail: fmt.Sprintf("Projected range $%.2f–$%.2f with %d days left; $%.2f spent so far.",
+					in.Forecast.Low, in.Forecast.High, in.Forecast.DaysLeft, in.Forecast.MTD),
+				ActionLabel: "Show this month",
+				ActionURL: withQuery(in.Query, map[string]string{
+					"date_from": time.Date(in.Now.Year(), in.Now.Month(), 1, 0, 0, 0, 0, time.Local).Format("2006-01-02")}),
+			})
+		}
+	}
+
 	// 1. Unpriced calls warning (highest priority data-quality signal).
 	if totals.UnpricedCalls > 0 {
 		top := ""
@@ -71,7 +149,7 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 			Headline:    fmt.Sprintf("%s unpriced calls are excluded from cost totals", groupInt64(int64(totals.UnpricedCalls))),
 			Detail:      "These calls count tokens but show $0.00 until a rate is known." + top + " Run `dashd update-models` and `dashd reprice`.",
 			ActionLabel: "Show unpriced calls",
-			ActionURL:   "/?unpriced=1",
+			ActionURL:   withQuery(in.Query, map[string]string{"unpriced": "1"}),
 		})
 	}
 
@@ -92,11 +170,14 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 				}
 			}
 			out = append(out, Insight{
-				ID:       "burn-pace",
-				Category: "Cost & Burn",
-				Severity: sev,
-				Headline: fmt.Sprintf("7-day pace is $%.2f/day (~$%.0f/30d)", dailyAvg, projMonth),
-				Detail:   fmt.Sprintf("Spent $%.2f over the last %d days%s.", b.Cost, b.Days, deltaNote),
+				ID:          "burn-pace",
+				Category:    "Cost & Burn",
+				Severity:    sev,
+				Headline:    fmt.Sprintf("7-day pace is $%.2f/day (~$%.0f/30d)", dailyAvg, projMonth),
+				Detail:      fmt.Sprintf("Spent $%.2f over the last %d days%s.", b.Cost, b.Days, deltaNote),
+				ActionLabel: "Show last 7 days",
+				ActionURL: withQuery(in.Query, map[string]string{
+					"date_from": localDay(in.Now).AddDate(0, 0, -6).Format("2006-01-02")}),
 			})
 			break
 		}
@@ -127,11 +208,13 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 	// 4. High-churn / retry loop detection.
 	if sig.HighChurnSessions > 0 {
 		out = append(out, Insight{
-			ID:       "retry-loops",
-			Category: "Tools & Loops",
-			Severity: "warn",
-			Headline: fmt.Sprintf("%d high-churn session(s) with ≥20%% tool error rate", sig.HighChurnSessions),
-			Detail:   fmt.Sprintf("Sessions with ≥40 calls and heavy tool failures cost $%.2f — often caused by repeated failing test or build loops.", sig.HighChurnCost),
+			ID:          "retry-loops",
+			Category:    "Tools & Loops",
+			Severity:    "warn",
+			Headline:    fmt.Sprintf("%d high-churn session(s) with ≥20%% tool error rate", sig.HighChurnSessions),
+			Detail:      fmt.Sprintf("Sessions with ≥40 calls and heavy tool failures cost $%.2f — often caused by repeated failing test or build loops.", sig.HighChurnCost),
+			ActionLabel: "Sessions by tool errors",
+			ActionURL:   withQuery(in.Query, map[string]string{"view": "sessions", "sort": "errors"}),
 		})
 	}
 
@@ -143,24 +226,28 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 			sev = "warn"
 		}
 		out = append(out, Insight{
-			ID:       "tool-errors",
-			Category: "Tools & Loops",
-			Severity: sev,
-			Headline: fmt.Sprintf("%s failed %.1f%% of the time (%d/%d calls)", sig.ErrorToolName, errPct, sig.ErrorToolErrors, sig.ErrorToolCalls),
-			Detail:   fmt.Sprintf("Tool failures in %s are associated with $%.2f in follow-up LLM spend.", sig.ErrorToolName, sig.ErrorToolCost),
+			ID:          "tool-errors",
+			Category:    "Tools & Loops",
+			Severity:    sev,
+			Headline:    fmt.Sprintf("%s failed %.1f%% of the time (%d/%d calls)", sig.ErrorToolName, errPct, sig.ErrorToolErrors, sig.ErrorToolCalls),
+			Detail:      fmt.Sprintf("Tool failures in %s are associated with $%.2f in follow-up LLM spend.", sig.ErrorToolName, sig.ErrorToolCost),
+			ActionLabel: "Open tools breakdown",
+			ActionURL:   withQuery(in.Query, map[string]string{"view": "breakdown", "sub": "tools"}),
 		})
 	}
 
-	// 6. Prompt caching hit rate & low-cache project warning.
+	// 6. Prompt caching: what it saved (the hit rate alone is already on the
+	// Total Tokens card), and the project that uses it least.
 	cacheDenom := totals.InputTokens + totals.CacheReadTokens + totals.CacheWriteTokens
-	if cacheDenom > 0 && totals.CacheReadTokens > 0 {
+	if in.CacheSavings >= 0.01 && cacheDenom > 0 {
 		hitPct := float64(totals.CacheReadTokens) / float64(cacheDenom) * 100
 		out = append(out, Insight{
-			ID:       "cache-efficiency",
+			ID:       "cache-savings",
 			Category: "Caching",
 			Severity: "info",
-			Headline: fmt.Sprintf("Overall prompt cache hit rate is %.1f%% (%s cached tokens)", hitPct, formatCompact(totals.CacheReadTokens)),
-			Detail:   fmt.Sprintf("Cache reads offset %s out of %s total prompt tokens.", formatCompact(totals.CacheReadTokens), formatCompact(cacheDenom)),
+			Headline: fmt.Sprintf("Prompt caching saved about $%.2f (%.1f%% hit rate)", in.CacheSavings, hitPct),
+			Detail: fmt.Sprintf("%s cached prompt tokens were billed at the cache-read rate instead of the input rate; without caching this view would cost ~$%.2f.",
+				formatCompact(totals.CacheReadTokens), totals.Cost+in.CacheSavings),
 		})
 	}
 	if sig.LowCacheProject != "" && sig.LowCacheProjectHit < 25 {
@@ -175,18 +262,20 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 			Headline:    fmt.Sprintf("Low cache hit rate (%.1f%%) in %s", sig.LowCacheProjectHit, projName),
 			Detail:      fmt.Sprintf("Across %d calls ($%.2f), %s reused little cached context — shorter restarts or dynamic system prompts can increase input cost.", sig.LowCacheProjectCall, sig.LowCacheProjectCost, projName),
 			ActionLabel: "Filter project",
-			ActionURL:   "/?project=" + url.QueryEscape(sig.LowCacheProject),
+			ActionURL:   withQuery(in.Query, map[string]string{"project": sig.LowCacheProject}),
 		})
 	}
 
 	// 7. Long-prompt tier hits (>= 200K context).
 	if sig.LongPromptCalls > 0 {
 		out = append(out, Insight{
-			ID:       "long-prompt-tier",
-			Category: "Model Efficiency",
-			Severity: "tip",
-			Headline: fmt.Sprintf("%s calls crossed 200K+ context tokens ($%.2f)", groupInt64(int64(sig.LongPromptCalls)), sig.LongPromptCost),
-			Detail:   "Long-context prompts trigger higher per-token pricing tiers on Pro/flagship models; compacting or starting fresh sessions earlier reduces tier-2 charges.",
+			ID:          "long-prompt-tier",
+			Category:    "Model Efficiency",
+			Severity:    "tip",
+			Headline:    fmt.Sprintf("%s calls crossed 200K+ context tokens ($%.2f)", groupInt64(int64(sig.LongPromptCalls)), sig.LongPromptCost),
+			Detail:      "Long-context prompts trigger higher per-token pricing tiers on Pro/flagship models; compacting or starting fresh sessions earlier reduces tier-2 charges.",
+			ActionLabel: "Sessions by tokens",
+			ActionURL:   withQuery(in.Query, map[string]string{"view": "sessions", "sort": "tokens"}),
 		})
 	}
 
@@ -199,7 +288,7 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 			Headline:    fmt.Sprintf("%s drives %.0f%% of total spend ($%.2f)", sig.TopModelName, sig.TopModelPct, sig.TopModelCost),
 			Detail:      "Routing routine or exploratory tasks to a Flash/Sonnet-tier model can cut cost without slowing iteration.",
 			ActionLabel: "Filter model",
-			ActionURL:   "/?model=" + url.QueryEscape(sig.TopModelName),
+			ActionURL:   withQuery(in.Query, map[string]string{"model": sig.TopModelName}),
 		})
 	}
 	genTotal := sig.OutputTokens + sig.ReasoningTokens
@@ -207,11 +296,13 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 		rPct := float64(sig.ReasoningTokens) / float64(genTotal) * 100
 		if rPct >= 25 {
 			out = append(out, Insight{
-				ID:       "reasoning-share",
-				Category: "Model Efficiency",
-				Severity: "info",
-				Headline: fmt.Sprintf("%.0f%% of generated tokens are reasoning/thinking tokens", rPct),
-				Detail:   fmt.Sprintf("%s reasoning tokens vs. %s visible output tokens (both are billed at the output rate).", formatCompact(sig.ReasoningTokens), formatCompact(sig.OutputTokens)),
+				ID:          "reasoning-share",
+				Category:    "Model Efficiency",
+				Severity:    "info",
+				Headline:    fmt.Sprintf("%.0f%% of generated tokens are reasoning/thinking tokens", rPct),
+				Detail:      fmt.Sprintf("%s reasoning tokens vs. %s visible output tokens (both are billed at the output rate).", formatCompact(sig.ReasoningTokens), formatCompact(sig.OutputTokens)),
+				ActionLabel: "Compare models",
+				ActionURL:   withQuery(in.Query, map[string]string{"view": "breakdown", "sub": "models"}),
 			})
 		}
 	}
@@ -221,11 +312,13 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 	if activeTime > 60 && sig.TopToolName != "" {
 		toolPct := totals.ToolSeconds / activeTime * 100
 		out = append(out, Insight{
-			ID:       "time-split",
-			Category: "Tools & Loops",
-			Severity: "info",
-			Headline: fmt.Sprintf("Tools account for %.0f%% of active wait time (%s)", toolPct, humanDuration(totals.ToolSeconds)),
-			Detail:   fmt.Sprintf("Slowest tool: %s (%s across %s calls), compared to %s waiting on LLMs.", sig.TopToolName, humanDuration(sig.TopToolSeconds), groupInt64(int64(sig.TopToolCalls)), humanDuration(totals.LLMSeconds)),
+			ID:          "time-split",
+			Category:    "Tools & Loops",
+			Severity:    "info",
+			Headline:    fmt.Sprintf("Tools account for %.0f%% of active wait time (%s)", toolPct, humanDuration(totals.ToolSeconds)),
+			Detail:      fmt.Sprintf("Slowest tool: %s (%s across %s calls), compared to %s waiting on LLMs.", sig.TopToolName, humanDuration(sig.TopToolSeconds), groupInt64(int64(sig.TopToolCalls)), humanDuration(totals.LLMSeconds)),
+			ActionLabel: "Open tools breakdown",
+			ActionURL:   withQuery(in.Query, map[string]string{"view": "breakdown", "sub": "tools"}),
 		})
 	}
 
@@ -242,7 +335,7 @@ func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, bur
 			Headline:    fmt.Sprintf("%s accounts for %.0f%% of spend across %d machines", sig.TopMachine, sig.TopMachinePct, sig.MachineCount),
 			Detail:      fmt.Sprintf("%s logged $%.2f.%s", sig.TopMachine, sig.TopMachineCost, speedNote),
 			ActionLabel: "Filter machine",
-			ActionURL:   "/?machine=" + url.QueryEscape(sig.TopMachine),
+			ActionURL:   withQuery(in.Query, map[string]string{"machine": sig.TopMachine}),
 		})
 	}
 
@@ -270,5 +363,6 @@ func BuildInsightsFromStore(ctx context.Context, st *store.Store, f store.Filter
 		return nil, err
 	}
 	burn := burnWindows(daily, now)
-	return BuildInsights(sig, totals, burn), nil
+	return BuildInsightsFull(InsightInputs{Signals: sig, Totals: totals, Burn: burn,
+		Forecast: monthForecast(burn, now), Now: now}), nil
 }

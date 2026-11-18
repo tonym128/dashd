@@ -98,7 +98,7 @@ func TestIndexRendersWithData(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"Agent Cost Dashboard", "Activity &amp; Throughput",
+		"Agent costs", "Activity &amp; Throughput",
 		`class="stats-grid"`, "Total Cost", "Unpriced Calls",
 		"window.dashboardData", "/assets/dashboard.css", "/assets/dashboard.js",
 	} {
@@ -609,15 +609,16 @@ func TestSortFieldsExistInThePayload(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("fixture produced rows for %d of 3 tables", len(rows))
 	}
-	// Sorted session fields are checked against the sessions the page nests
-	// under each project.
+	// Session rows come from the paginated /api/sessions endpoint.
+	var page struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	if err := json.Unmarshal(get(t, srv, "/api/sessions").Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
 	var session map[string]any
-	for _, p := range rows["projects"] {
-		row, _ := p.(map[string]any)
-		if list, _ := row["sessions_list"].([]any); len(list) > 0 {
-			session, _ = list[0].(map[string]any)
-			break
-		}
+	if len(page.Sessions) > 0 {
+		session = page.Sessions[0]
 	}
 	if session == nil {
 		t.Fatal("fixture produced no session rows")

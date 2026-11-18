@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,7 +44,11 @@ func openReadOnly(path string) (*sql.DB, error) {
 // carries protobuf blobs. The `idx` column is monotonic, which makes it a
 // natural resume cursor: a later scan reads only the steps that appeared since,
 // rather than re-decoding a few hundred blobs every time.
-type AntigravityParser struct{}
+type AntigravityParser struct {
+	// labels are model labels read from the conversation's own gen_metadata,
+	// consulted only for ids agyModelNames does not know.
+	labels map[int32]string
+}
 
 // Step type and status constants, as they appear in the `steps` table.
 const (
@@ -100,6 +105,9 @@ var agyModelNames = map[int32]string{
 	1416: "Gemini 4 Argon (Low)",
 	1417: "Gemini 4 Argon (High)",
 	1418: "Gemini 4 Argon (Medium)",
+	// Read from a conversation's gen_metadata, which pairs
+	// MODEL_PLACEHOLDER_M526 with this label and the API id gemini-4-hydrogen.
+	1526: "Gemini 4 Hydrogen (Medium)",
 }
 
 func NewAntigravityParser() Parser { return &AntigravityParser{} }
@@ -153,6 +161,7 @@ func (p *AntigravityParser) Parse(path string, prev model.ScanState, pricer *Pri
 	defer db.Close()
 
 	project := agyReadWorkspace(db)
+	p.labels = agyLabelsFromGenMetadata(db)
 
 	b := newSessionBuilder(uid, model.AgentAgy, project)
 	// Only steps past the cursor. A cursor of zero reads the whole conversation;
@@ -232,6 +241,9 @@ func (p *AntigravityParser) consumeStep(b *sessionBuilder, idx int64, stepType, 
 
 		modelID := int32(u[agyUsageModel])
 		modelName, known := agyModelNames[modelID]
+		if !known {
+			modelName, known = p.labels[modelID]
+		}
 		if !known {
 			modelName = fmt.Sprintf("Antigravity Model %d", modelID)
 		}
@@ -1135,4 +1147,72 @@ func nestedAny(obj map[string]any, path ...string) any {
 		cur = m[key]
 	}
 	return cur
+}
+
+var (
+	agyPlaceholderRe = regexp.MustCompile(`^MODEL_PLACEHOLDER_M(\d+)$`)
+	agyLabelRe       = regexp.MustCompile(`^(Gemini|Claude|GPT)[A-Za-z0-9 .()-]{2,60}$`)
+	printableRunRe   = regexp.MustCompile(`[ -~]{4,80}`)
+)
+
+// agyLabelsFromGenMetadata reads model labels out of a conversation's
+// gen_metadata. Antigravity records each generation's model there as an enum
+// name, MODEL_PLACEHOLDER_M<n>, next to its display label; the numeric id in
+// the step usage is 1000+n (M418 is 1418, "Gemini 4 Argon (Medium)"). This
+// lets a model released after this build be named, and therefore priced,
+// without waiting for agyModelNames to learn it. A table that is missing or
+// unreadable simply yields nothing.
+func agyLabelsFromGenMetadata(db *sql.DB) map[int32]string {
+	rows, err := db.Query(`SELECT * FROM gen_metadata LIMIT 2000`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil
+	}
+	out := map[int32]string{}
+	vals := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			return out
+		}
+		for _, v := range vals {
+			var b []byte
+			switch t := v.(type) {
+			case []byte:
+				b = t
+			case string:
+				b = []byte(t)
+			default:
+				continue
+			}
+			placeholder, label := "", ""
+			for _, run := range printableRunRe.FindAll(b, -1) {
+				str := strings.Trim(string(run), "\"*$")
+				if m := agyPlaceholderRe.FindStringSubmatch(str); m != nil && placeholder == "" {
+					placeholder = m[1]
+				} else if label == "" && agyLabelRe.MatchString(str) {
+					label = str
+				}
+			}
+			if placeholder == "" || label == "" {
+				continue
+			}
+			n, err := strconv.Atoi(placeholder)
+			if err != nil || n < 0 || n > 100000 {
+				continue
+			}
+			id := int32(1000 + n)
+			if _, seen := out[id]; !seen {
+				out[id] = label
+			}
+		}
+	}
+	return out
 }

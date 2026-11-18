@@ -4,11 +4,20 @@ services:
     image: ghcr.io/tonym128/dashd:latest
     container_name: dashd-server
     restart: unless-stopped
+    # Published on every interface so push agents can reach it. Docker's port
+    # publishing bypasses host firewalls such as ufw, which is why both tokens
+    # are required below: compose refuses to start without them.
     ports:
       - "8753:8753"
     environment:
-      DASHD_AUTH_TOKEN: "${DASHD_AUTH_TOKEN:-}"
-      DASHD_INGEST_TOKEN: "${DASHD_INGEST_TOKEN:-}"
+      # Dashboard (read) token for browsers (sign in at /login) and API clients.
+      DASHD_AUTH_TOKEN: "${DASHD_AUTH_TOKEN:?set DASHD_AUTH_TOKEN, e.g. export DASHD_AUTH_TOKEN=$(openssl rand -hex 32)}"
+      # Write-only token for push agents; give laptops this one, not the dashboard token.
+      DASHD_INGEST_TOKEN: "${DASHD_INGEST_TOKEN:?set DASHD_INGEST_TOKEN, e.g. export DASHD_INGEST_TOKEN=$(openssl rand -hex 32)}"
+      # Optional: separate token for reprice/prune/rename; without it the dashboard token is admin.
+      DASHD_ADMIN_TOKEN: "${DASHD_ADMIN_TOKEN:-}"
+      # Timezone used to bucket calls into days.
+      DASHD_TZ: "${DASHD_TZ:-UTC}"
     volumes:
       - dashd-data:/var/lib/dashd
     healthcheck:
@@ -25,6 +34,7 @@ services:
       - /usr/local/lib/dashd/models.json
       - -models-refresh
       - 24h
+      - -accept-ingest
       - -db
       - /var/lib/dashd/dashboard.db
 
