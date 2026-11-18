@@ -77,21 +77,20 @@ checksum:
   algorithm: sha256
 
 # Keyless signing of checksums.txt with cosign (Sigstore), using the release
-# workflow's GitHub OIDC identity: no key to manage. The installers and
+# workflow's GitHub OIDC identity: no key to manage. cosign v3 writes a single
+# Sigstore bundle (signature + certificate). The installers and
 # `dashd self-update` verify each archive against checksums.txt; anyone can
 # verify checksums.txt itself with
-#   cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
+#   cosign verify-blob --bundle checksums.txt.sigstore.json \
 #     --certificate-identity-regexp 'https://github.com/tonym128/dashd/' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
 signs:
   - cmd: cosign
     artifacts: checksum
-    certificate: "${artifact}.pem"
-    signature: "${artifact}.sig"
+    signature: "${artifact}.sigstore.json"
     args:
       - sign-blob
-      - "--output-certificate=${certificate}"
-      - "--output-signature=${signature}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
 

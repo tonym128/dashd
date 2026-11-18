@@ -101,7 +101,13 @@ they leave the machine with `-redact-paths home|basename|hash` and
 Release archives are listed in `checksums.txt`, which is signed with cosign
 (keyless, GitHub OIDC). `install.sh`, `install.ps1` and `dashd self-update`
 refuse an archive whose SHA-256 does not match, and `self-update` never
-installs an older version than the running one.
+installs an older version than the running one. To check `checksums.txt`
+itself:
+
+    cosign verify-blob --bundle checksums.txt.sigstore.json \
+      --certificate-identity-regexp 'https://github.com/tonym128/dashd/' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      checksums.txt
 
 **`-auth-token` is not a mitigation for script running in the page.** It is a
 request header, checked before the response is built. A payload that executes
