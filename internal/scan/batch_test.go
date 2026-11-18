@@ -78,3 +78,17 @@ func TestBatchSinkCursorsAdvanceOnlyAfterFlush(t *testing.T) {
 		t.Fatalf("idle pass resent %d sessions", len(sink.flushed))
 	}
 }
+
+func TestLastDurationIsRecorded(t *testing.T) {
+	st := newTestStore(t)
+	sc := newScanner(t, st, t.TempDir())
+	if sc.LastDuration() != 0 {
+		t.Fatal("duration before any pass")
+	}
+	if err := sc.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sc.LastDuration() < 0 {
+		t.Fatal("negative duration")
+	}
+}
