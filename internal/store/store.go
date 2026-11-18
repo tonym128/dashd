@@ -411,6 +411,7 @@ var migrations = []migration{
 	v7MachineStatus,
 	v8IngestedAt,
 	v9MetaAndMachineHealth,
+	v10RereadUnknownAntigravity,
 }
 
 // execScript turns a multi-statement script into a migration step.

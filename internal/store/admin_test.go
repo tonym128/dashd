@@ -209,3 +209,27 @@ func TestMigrationBacksUpOldDatabase(t *testing.T) {
 		t.Fatalf("no pre-migration backup: %v", err)
 	}
 }
+
+func TestMigrationV10DropsCursorsForUnknownAntigravityModels(t *testing.T) {
+	st, _ := Open(filepath.Join(t.TempDir(), "m.db"))
+	defer st.Close()
+	_ = st.ReplaceSession(model.SessionWrite{Session: model.Session{UID: "c1", Agent: "agy"},
+		Calls: []model.Call{{SessionUID: "c1", Agent: "agy", Model: "antigravity-model-1526", CallKey: "k"}}})
+	_ = st.ReplaceSession(model.SessionWrite{Session: model.Session{UID: "c2", Agent: "agy"},
+		Calls: []model.Call{{SessionUID: "c2", Agent: "agy", Model: "gemini-4-argon", CallKey: "k"}}})
+	for _, uid := range []string{"c1", "c2"} {
+		if err := st.SaveScanState(model.ScanState{Path: "/x/" + uid + ".db", Agent: "agy", SessionUID: uid, Offset: 9}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.InTx(v10RereadUnknownAntigravity.apply); err != nil {
+		t.Fatal(err)
+	}
+	states, _ := st.LoadScanStates()
+	if _, ok := states["/x/c1.db"]; ok {
+		t.Error("cursor kept for a conversation with an unknown model")
+	}
+	if _, ok := states["/x/c2.db"]; !ok {
+		t.Error("cursor dropped for a conversation whose models are known")
+	}
+}
