@@ -111,7 +111,7 @@ func TestMachinePersistenceAndFiltering(t *testing.T) {
 		t.Fatalf("Sessions(workstation) = %+v, want 1 session with machine=workstation", sessions)
 	}
 
-	if err := st.RecordMachineHeartbeat("macbook", 1, 2, ts); err != nil {
+	if err := st.RecordMachineHeartbeat(Heartbeat{Machine: "macbook", SessionsPushed: 1, CallsPushed: 2, At: ts}); err != nil {
 		t.Fatal(err)
 	}
 	statuses, err := st.MachineStatuses(ctx)

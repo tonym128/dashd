@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,16 +26,70 @@ type ghRelease struct {
 	TagName string `json:"tag_name"`
 }
 
-func runSelfUpdate(ctx context.Context, out io.Writer) error {
+// runSelfUpdate installs the latest release over the running binary and
+// reports whether it changed anything.
+func runSelfUpdate(ctx context.Context, out io.Writer) (bool, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("locate current executable: %w", err)
+		return false, fmt.Errorf("locate current executable: %w", err)
 	}
 	exe, err = filepath.EvalSymlinks(exe)
 	if err != nil {
-		return fmt.Errorf("resolve executable path: %w", err)
+		return false, fmt.Errorf("resolve executable path: %w", err)
 	}
-	return selfUpdateFrom(ctx, githubLatestReleaseURL, "https://github.com/tonym128/dashd/releases/download", version, runtime.GOOS, runtime.GOARCH, exe, out)
+	before := fileDigest(exe)
+	if err := selfUpdateFrom(ctx, githubLatestReleaseURL, "https://github.com/tonym128/dashd/releases/download", version, runtime.GOOS, runtime.GOARCH, exe, out); err != nil {
+		return false, err
+	}
+	return fileDigest(exe) != before, nil
+}
+
+func fileDigest(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// compareVersions compares dotted numeric versions ("0.6.1" vs "0.10.0"),
+// ignoring a leading v and any -prerelease suffix. It returns -1, 0 or 1, and
+// ok=false when either side is not a version (a "dev" build).
+func compareVersions(a, b string) (int, bool) {
+	parse := func(v string) ([]int, bool) {
+		v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+		if i := strings.IndexAny(v, "-+"); i >= 0 {
+			v = v[:i]
+		}
+		parts := strings.Split(v, ".")
+		out := make([]int, 3)
+		if len(parts) == 0 || len(parts) > 3 {
+			return nil, false
+		}
+		for i, p := range parts {
+			n, err := strconv.Atoi(p)
+			if err != nil || n < 0 {
+				return nil, false
+			}
+			out[i] = n
+		}
+		return out, true
+	}
+	x, okA := parse(a)
+	y, okB := parse(b)
+	if !okA || !okB {
+		return 0, false
+	}
+	for i := range 3 {
+		switch {
+		case x[i] < y[i]:
+			return -1, true
+		case x[i] > y[i]:
+			return 1, true
+		}
+	}
+	return 0, true
 }
 
 func selfUpdateFrom(ctx context.Context, apiURL, downloadBase, curVer, goos, goarch, exePath string, out io.Writer) error {
@@ -59,8 +116,10 @@ func selfUpdateFrom(ctx context.Context, apiURL, downloadBase, curVer, goos, goa
 		return fmt.Errorf("release metadata missing tag_name")
 	}
 	ver := strings.TrimPrefix(rel.TagName, "v")
-	if curVer != "" && curVer != "dev" && strings.TrimPrefix(curVer, "v") == ver {
-		fmt.Fprintf(out, "dashd is already up to date (%s)\n", rel.TagName)
+	if cmp, ok := compareVersions(curVer, ver); ok && cmp >= 0 {
+		// Equal, or this build is newer than "latest" (a pre-release or a
+		// local build): never downgrade.
+		fmt.Fprintf(out, "dashd is already up to date (%s; latest release %s)\n", curVer, rel.TagName)
 		return nil
 	}
 
@@ -90,6 +149,18 @@ func selfUpdateFrom(ctx context.Context, apiURL, downloadBase, curVer, goos, goa
 	raw, err := io.ReadAll(io.LimitReader(dresp.Body, 128<<20))
 	if err != nil {
 		return fmt.Errorf("read archive: %w", err)
+	}
+	// Verify against the release's checksums.txt before anything is unpacked.
+	// HTTPS protects the transfer; this protects against a truncated or
+	// swapped asset, and is the same check the installers make.
+	sumsURL := fmt.Sprintf("%s/%s/checksums.txt", strings.TrimRight(downloadBase, "/"), rel.TagName)
+	want, err := fetchChecksum(ctx, client, sumsURL, archive)
+	if err != nil {
+		return err
+	}
+	gotSum := sha256.Sum256(raw)
+	if got := hex.EncodeToString(gotSum[:]); !strings.EqualFold(got, want) {
+		return fmt.Errorf("checksum mismatch for %s: got %s, release says %s; not installing", archive, got, want)
 	}
 
 	var binBytes []byte
@@ -177,4 +248,33 @@ func extractFromZip(raw []byte, wantName string) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("%s not found in zip archive", wantName)
+}
+
+// fetchChecksum returns the sha256 recorded for name in a goreleaser
+// checksums.txt.
+func fetchChecksum(ctx context.Context, client *http.Client, url, name string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "dashd")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("download checksums: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download checksums %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == name {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("%s is not listed in checksums.txt; not installing", name)
 }

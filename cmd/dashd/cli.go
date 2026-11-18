@@ -26,7 +26,7 @@ const defaultCommand = "serve-and-scan"
 // commands is the complete set. It is a slice rather than inline cases in a
 // switch so that the same list can be printed in the error message and the
 // usage text, which is the only way those two stay in agreement.
-var commands = []string{"serve-and-scan", "serve", "scan", "push", "reprice", "prune", "update-models", "self-update", "doctor", "insights", "stats"}
+var commands = []string{"serve-and-scan", "serve", "scan", "push", "status", "reprice", "prune", "backup", "export", "digest", "update-models", "self-update", "doctor", "insights", "stats"}
 
 // options is the parsed command line.
 type options struct {
@@ -47,6 +47,46 @@ type options struct {
 	// authentication", not "authentication with an empty secret".
 	authToken   string
 	ingestToken string
+	adminToken  string
+	// The *File variants read a token from a file, which keeps it out of argv
+	// (world-readable via ps on Linux) and out of the environment.
+	authTokenFile     string
+	ingestTokenFile   string
+	adminTokenFile    string
+	machineTokensFile string
+
+	acceptIngest   bool
+	insecureNoAuth bool
+	allowedHosts   string
+	trustProxy     bool
+	tlsCert        string
+	tlsKey         string
+	tz             string
+
+	// prune
+	includeUndated bool
+	vacuum         bool
+
+	// push
+	stateDB      string
+	resync       bool
+	redactPaths  string
+	redactTitles bool
+	autoUpdate   time.Duration
+
+	// insights / export / digest filters
+	since       string
+	until       string
+	project     string
+	agent       string
+	modelFilter string
+	onlyMachine string
+	jsonOut     bool
+	format      string
+	out         string
+	webhookURL  string
+	digestEvery time.Duration
+	tagsFile    string
 	verbose     bool
 	showVer     bool
 }
@@ -87,6 +127,50 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 		"require/send this bearer token (also DASHD_AUTH_TOKEN); empty disables authentication")
 	fs.StringVar(&o.ingestToken, "ingest-token", "",
 		"optional write-only bearer token for /api/ingest and /api/models (also DASHD_INGEST_TOKEN)")
+	fs.StringVar(&o.adminToken, "admin-token", "",
+		"optional token required for admin actions (reprice, prune, forget, rename); also DASHD_ADMIN_TOKEN. Without it the -auth-token grants admin")
+	fs.StringVar(&o.authTokenFile, "auth-token-file", "", "read -auth-token from this file (keeps it out of argv)")
+	fs.StringVar(&o.ingestTokenFile, "ingest-token-file", "", "read -ingest-token from this file")
+	fs.StringVar(&o.adminTokenFile, "admin-token-file", "", "read -admin-token from this file")
+	fs.StringVar(&o.machineTokensFile, "machine-tokens-file", "",
+		"file of `machine token` lines; each token may only push as its machine")
+	fs.BoolVar(&o.acceptIngest, "accept-ingest", false,
+		"accept POST /api/ingest from push agents (on by default for 'serve' and whenever an ingest token is set)")
+	fs.BoolVar(&o.insecureNoAuth, "insecure-no-auth", false,
+		"allow a non-loopback -addr without -auth-token (exposes all data to the network)")
+	fs.StringVar(&o.allowedHosts, "allowed-hosts", "",
+		"comma-separated hostnames accepted in the Host header when no -auth-token is set (DNS-rebinding defence); * disables")
+	fs.BoolVar(&o.trustProxy, "trust-proxy", false,
+		"trust X-Forwarded-For / X-Forwarded-Proto from a reverse proxy")
+	fs.StringVar(&o.tlsCert, "tls-cert", "", "serve HTTPS with this certificate file (with -tls-key)")
+	fs.StringVar(&o.tlsKey, "tls-key", "", "serve HTTPS with this key file (with -tls-cert)")
+	fs.StringVar(&o.tz, "tz", "",
+		"IANA timezone used to bucket calls into days (default: the host's local zone; also DASHD_TZ)")
+	fs.BoolVar(&o.includeUndated, "include-undated", false, "for 'prune', also delete calls with no timestamp")
+	fs.BoolVar(&o.vacuum, "vacuum", true, "for 'prune', VACUUM afterwards to reclaim disk space")
+	fs.StringVar(&o.stateDB, "state-db", filepath.Join(home, ".local/share/dashd/push-state.db"),
+		"for 'push' and 'status', the local cursor database")
+	fs.BoolVar(&o.resync, "resync", false, "for 'push', forget local cursors and resend all history")
+	fs.StringVar(&o.redactPaths, "redact-paths", "none",
+		"for 'push', how project and log paths are sent: none, home (strip $HOME), basename, or hash")
+	fs.BoolVar(&o.redactTitles, "redact-titles", false, "for 'push', do not send session titles")
+	fs.DurationVar(&o.autoUpdate, "auto-update", 0,
+		"for 'push', check for a new release on this interval and restart into it (e.g. 24h); 0 disables")
+	fs.StringVar(&o.since, "since", "", "for insights/export/digest, only calls on or after YYYY-MM-DD")
+	fs.StringVar(&o.until, "until", "", "for insights/export/digest, only calls on or before YYYY-MM-DD")
+	fs.StringVar(&o.project, "project", "", "for insights/export/digest, comma-separated projects")
+	fs.StringVar(&o.agent, "agent", "", "for insights/export/digest, comma-separated agents")
+	fs.StringVar(&o.modelFilter, "model", "", "for insights/export/digest, comma-separated models")
+	fs.StringVar(&o.onlyMachine, "only-machine", "", "for insights/export/digest, comma-separated machines")
+	fs.BoolVar(&o.jsonOut, "json", false, "for insights/status, print JSON")
+	fs.StringVar(&o.format, "format", "csv", "for 'export', csv or json")
+	fs.StringVar(&o.out, "out", "", "for 'export'/'backup', the output file (export defaults to stdout)")
+	fs.StringVar(&o.webhookURL, "webhook-url", "",
+		"POST budget alerts and digests to this URL (Slack/Discord-compatible JSON; also DASHD_WEBHOOK_URL)")
+	fs.DurationVar(&o.digestEvery, "digest-every", 0,
+		"with -webhook-url, send a usage digest on this interval (e.g. 168h for weekly); 0 disables")
+	fs.StringVar(&o.tagsFile, "tags-file", "",
+		"JSON file mapping a tag (client, team, cost centre) to a list of project path prefixes")
 	fs.BoolVar(&o.verbose, "verbose", false, "log every request and scan detail")
 	fs.BoolVar(&o.showVer, "version", false, "print the version, commit and build date, then exit")
 	return fs
@@ -175,8 +259,12 @@ Commands:
   serve           serve the dashboard only; data is maintained elsewhere
   scan            one scan pass, print totals, exit (for cron or a timer)
   push            scan local logs and push updates to a remote dashd server
+  status          show this machine's push state: last push, last error, cursors
   reprice         re-cost every stored call with the current price dump
   prune           delete calls older than -before YYYY-MM-DD and vacuum the DB
+  backup          write a consistent copy of the database to -out (safe while serving)
+  export          write calls as CSV or JSON (-format, -out, filter flags)
+  digest          print a Markdown usage digest (or POST it to -webhook-url)
   update-models   download the latest OpenRouter model pricing to -models
   self-update     download and install the latest dashd release binary
   doctor          check local agent logs, pricing, database, and remote server
@@ -187,7 +275,9 @@ Flags:
 `)
 	fs.PrintDefaults()
 	fmt.Fprintf(out, `
-Authentication is off unless -auth-token is set. With a token, requests need
-"Authorization: Bearer <token>" or "X-Auth-Token: <token>", except /healthz.
+Authentication is off unless -auth-token is set. With a token, API clients send
+"Authorization: Bearer <token>" and browsers sign in at /login; /healthz is
+always open. A non-loopback -addr without a token is refused unless
+-insecure-no-auth is given.
 `)
 }

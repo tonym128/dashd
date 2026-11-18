@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,6 +67,9 @@ func TestRemoteSinkPushesToIngestEndpoint(t *testing.T) {
 	if err := sink.RecomputeSession(sess.UID); err != nil {
 		t.Fatal(err)
 	}
+	if err := sink.Flush(); err != nil {
+		t.Fatal(err)
+	}
 
 	machines, err := st.Machines(ctx)
 	if err != nil {
@@ -77,7 +82,7 @@ func TestRemoteSinkPushesToIngestEndpoint(t *testing.T) {
 	// Wrong token must fail so the caller does not advance cursors.
 	badSink := newRemoteSink(ts.URL, "wrong-token", "devbox")
 	_ = badSink.ReplaceSession(sess)
-	if err := badSink.RecomputeSession(sess.UID); err == nil {
+	if err := badSink.Flush(); err == nil {
 		t.Fatal("expected error with wrong auth token, got nil")
 	}
 
@@ -106,7 +111,10 @@ func TestRemoteSinkPushesToIngestEndpoint(t *testing.T) {
 	if err := syncSink.RecomputeSession(sess.UID); err != nil {
 		t.Fatal(err)
 	}
-	if err := syncSink.SendHeartbeat(); err != nil {
+	if err := syncSink.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncSink.SendHeartbeat(nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -152,6 +160,9 @@ func TestSelfUpdateFromTarGz(t *testing.T) {
 			_, _ = w.Write([]byte(`{"tag_name":"v0.9.0"}`))
 		case "/dl/v0.9.0/dashd_0.9.0_linux_amd64.tar.gz":
 			_, _ = w.Write(arcBuf.Bytes())
+		case "/dl/v0.9.0/checksums.txt":
+			sum := sha256.Sum256(arcBuf.Bytes())
+			fmt.Fprintf(w, "%x  dashd_0.9.0_linux_amd64.tar.gz\n", sum)
 		default:
 			http.NotFound(w, r)
 		}
@@ -200,6 +211,9 @@ func TestSelfUpdateFromZip(t *testing.T) {
 			_, _ = w.Write([]byte(`{"tag_name":"v0.9.0"}`))
 		case "/dl/v0.9.0/dashd_0.9.0_windows_amd64.zip":
 			_, _ = w.Write(zipBuf.Bytes())
+		case "/dl/v0.9.0/checksums.txt":
+			sum := sha256.Sum256(zipBuf.Bytes())
+			fmt.Fprintf(w, "%x  dashd_0.9.0_windows_amd64.zip\n", sum)
 		default:
 			http.NotFound(w, r)
 		}

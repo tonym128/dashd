@@ -52,7 +52,7 @@ func TestPruneBeforeRemovesOldCallsAndEmptySessions(t *testing.T) {
 		}
 	}
 
-	deleted, err := st.PruneBefore(ctx, cutoff)
+	deleted, err := st.PruneBefore(ctx, cutoff, PruneOptions{Vacuum: true})
 	if err != nil {
 		t.Fatalf("PruneBefore: %v", err)
 	}

@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -409,6 +410,7 @@ var migrations = []migration{
 	v6Machine,
 	v7MachineStatus,
 	v8IngestedAt,
+	v9MetaAndMachineHealth,
 }
 
 // execScript turns a multi-statement script into a migration step.
@@ -498,6 +500,9 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	if version > 0 && version < target {
+		s.backupBeforeMigration(version)
+	}
 	for _, m := range migrations {
 		if m.version <= version {
 			continue
@@ -572,7 +577,11 @@ func (s *Store) ReadTx(ctx context.Context, fn func(s *Store) error) error {
 // merge cannot make that guarantee, because a log that shrank means calls we
 // already recorded no longer exist.
 func (s *Store) ReplaceSession(sess model.SessionWrite) error {
-	return s.InTx(func(tx *sql.Tx) error {
+	return s.InTx(func(tx *sql.Tx) error { return replaceSessionTx(tx, sess) })
+}
+
+func replaceSessionTx(tx *sql.Tx, sess model.SessionWrite) error {
+	{
 		if err := clearSession(tx, sess.UID); err != nil {
 			return err
 		}
@@ -587,7 +596,7 @@ func (s *Store) ReplaceSession(sess model.SessionWrite) error {
 			INSERT INTO session (uid, agent, project, machine, path, title, ingested_at) VALUES (?,?,?,?,?,?,?)`,
 			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path, sess.Title, time.Now().Unix())
 		return err
-	})
+	}
 }
 
 // AppendSession adds newly-seen calls to a session that is already stored,
@@ -599,7 +608,11 @@ func (s *Store) ReplaceSession(sess model.SessionWrite) error {
 // written with an upsert so that re-reading a region is harmless rather than
 // duplicating.
 func (s *Store) AppendSession(sess model.SessionWrite) error {
-	return s.InTx(func(tx *sql.Tx) error {
+	return s.InTx(func(tx *sql.Tx) error { return appendSessionTx(tx, sess) })
+}
+
+func appendSessionTx(tx *sql.Tx, sess model.SessionWrite) error {
+	{
 		// An incremental append resumes past the header that carries the working
 		// directory, so the parser reports no project. Recover the stored one
 		// before writing, otherwise both the session row and the new call rows
@@ -640,7 +653,7 @@ func (s *Store) AppendSession(sess model.SessionWrite) error {
 				ingested_at = excluded.ingested_at`,
 			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path, time.Now().Unix())
 		return err
-	})
+	}
 }
 
 func clearSession(tx *sql.Tx, uid string) error {
@@ -695,10 +708,21 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 	}
 	defer callStmt.Close()
 
+	// Calls older than the last prune are not brought back by a log that
+	// still holds them: the operator asked for that window to be gone.
+	var floor int64
+	var floorStr string
+	if err := tx.QueryRow(`SELECT value FROM meta WHERE key = 'prune_floor'`).Scan(&floorStr); err == nil {
+		floor, _ = strconv.ParseInt(floorStr, 10, 64)
+	}
+
 	for _, c := range sess.Calls {
 		var ts int64
 		if !c.Time.IsZero() {
 			ts = c.Time.Unix()
+		}
+		if floor > 0 && ts > 0 && ts < floor {
+			continue
 		}
 		day := c.Day
 		if day == "" && !c.Time.IsZero() {
@@ -733,6 +757,9 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 			if !t.Time.IsZero() {
 				ts = t.Time.Unix()
 			}
+			if floor > 0 && ts > 0 && ts < floor {
+				continue
+			}
 			if _, err := toolStmt.Exec(
 				t.SessionUID, t.CallKey, t.Agent, rowProject(sess.Project, t.Project), rowProject(sess.Machine, t.Machine), t.Tool, ts, t.Seconds, boolInt(t.IsError),
 			); err != nil {
@@ -749,7 +776,15 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 // so it is correct after either ingestion path: an append leaves the old summary
 // stale, and a full read replaces it.
 func (s *Store) RecomputeSession(uid string) error {
-	_, err := s.q.Exec(`
+	return recomputeSessionWith(s.q, uid)
+}
+
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func recomputeSessionWith(q execer, uid string) error {
+	_, err := q.Exec(`
 		UPDATE session SET
 			calls             = COALESCE((SELECT COUNT(*)  FROM call      WHERE session_uid = session.uid), 0),
 			input_tokens      = COALESCE((SELECT SUM(input_tokens)      FROM call WHERE session_uid = session.uid), 0),
@@ -891,53 +926,6 @@ func (s *Store) MarkOrphaned(uids []string) error {
 func (s *Store) ClearOrphaned(uid string) error {
 	_, err := s.q.Exec("UPDATE session SET orphaned = 0 WHERE uid = ?", uid)
 	return err
-}
-
-// RecordMachineHeartbeat records when a push client last checked in and how
-// many sessions/calls it delivered.
-func (s *Store) RecordMachineHeartbeat(machine string, sessionsPushed, callsPushed int, at time.Time) error {
-	if machine == "" {
-		return nil
-	}
-	_, err := s.q.Exec(`
-		INSERT INTO machine_status (machine, last_seen_at, sessions_pushed, calls_pushed)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(machine) DO UPDATE SET
-			last_seen_at = excluded.last_seen_at,
-			sessions_pushed = machine_status.sessions_pushed + excluded.sessions_pushed,
-			calls_pushed = machine_status.calls_pushed + excluded.calls_pushed`,
-		machine, at.Unix(), sessionsPushed, callsPushed)
-	return err
-}
-
-// PruneBefore deletes call and tool_call rows older than before, removes
-// sessions left with zero calls, and runs VACUUM to reclaim disk space.
-func (s *Store) PruneBefore(ctx context.Context, before time.Time) (int64, error) {
-	cutoff := before.Unix()
-	var deleted int64
-	err := s.InTx(func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM call WHERE ts > 0 AND ts < ?`, cutoff)
-		if err != nil {
-			return fmt.Errorf("prune calls: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		deleted = n
-
-		if _, err := tx.ExecContext(ctx, `DELETE FROM tool_call WHERE ts > 0 AND ts < ?`, cutoff); err != nil {
-			return fmt.Errorf("prune tool_calls: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM session WHERE NOT EXISTS (SELECT 1 FROM call c WHERE c.session_uid = session.uid)`); err != nil {
-			return fmt.Errorf("prune empty sessions: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	if _, err := s.db.ExecContext(ctx, `VACUUM`); err != nil {
-		return deleted, fmt.Errorf("vacuum after prune: %w", err)
-	}
-	return deleted, nil
 }
 
 // ForgetSession removes a session and everything derived from it.
@@ -1090,4 +1078,41 @@ func inPlaceholders(n int) string {
 		return ""
 	}
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// IngestItem is one session write in an ApplyIngest batch.
+type IngestItem struct {
+	Replace bool
+	Session model.SessionWrite
+}
+
+// ApplyIngest commits a batch of pushed sessions — writes and summaries — in
+// one transaction, so a batch is either wholly stored or not at all, and the
+// write lock is taken once per request rather than three times per session.
+func (s *Store) ApplyIngest(items []IngestItem, orphaned []string) error {
+	return s.InTx(func(tx *sql.Tx) error {
+		for _, it := range items {
+			var err error
+			if it.Replace {
+				err = replaceSessionTx(tx, it.Session)
+			} else {
+				err = appendSessionTx(tx, it.Session)
+			}
+			if err != nil {
+				return err
+			}
+			if err := recomputeSessionWith(tx, it.Session.UID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("UPDATE session SET orphaned = 0 WHERE uid = ?", it.Session.UID); err != nil {
+				return err
+			}
+		}
+		for _, uid := range orphaned {
+			if _, err := tx.Exec("UPDATE session SET orphaned = 1 WHERE uid = ?", uid); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

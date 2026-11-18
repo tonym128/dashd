@@ -201,4 +201,24 @@ type IngestSession struct {
 type IngestRequest struct {
 	Machine  string          `json:"machine"`
 	Sessions []IngestSession `json:"sessions"`
+	// Orphaned lists session uids whose log has disappeared on the client, so
+	// the server can withdraw their transcript links too.
+	Orphaned []string `json:"orphaned,omitempty"`
+	// LastError is the client's most recent push failure, "" when healthy. It
+	// rides on heartbeats so the server can tell failing from switched off.
+	LastError string `json:"last_error,omitempty"`
+	// Version is the client's dashd version.
+	Version string `json:"version,omitempty"`
+}
+
+// IngestResponse is what POST /api/ingest answers.
+type IngestResponse struct {
+	OK       bool `json:"ok"`
+	Ingested int  `json:"ingested"`
+	// InstanceID identifies the server's database. A client that sees it
+	// change resends its history, because the server it was syncing to has
+	// been replaced.
+	InstanceID    string `json:"instance_id,omitempty"`
+	ServerVersion string `json:"server_version,omitempty"`
+	ModelsETag    string `json:"models_etag,omitempty"`
 }

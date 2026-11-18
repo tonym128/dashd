@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonym128/dashd/internal/model"
@@ -53,10 +54,40 @@ type Server struct {
 	DailyBudget   float64
 	MonthlyBudget float64
 
-	health        healthCache
-	ingestMu      sync.Mutex
-	ingestLimiter ingestRateLimiter
+	// CachePayloads reuses a rendered payload until the data generation
+	// changes (an ingest, an admin write or a completed scan pass) or 30s pass.
+	// Off by default so a test that writes to the store directly sees it.
+	CachePayloads bool
+	// IngestEnabled turns POST /api/ingest on. New sets it; cmd/dashd turns
+	// it off for a local serve-and-scan that has not asked to receive pushes.
+	IngestEnabled bool
+	// Tags groups projects into clients, teams or cost centres for the
+	// Tags breakdown and the ?tag= filter.
+	Tags Tags
+	// Pricer, when set, prices every ingested call on the server, ignoring
+	// whatever cost the client computed.
+	Pricer PriceFunc
+	// Version is reported to push clients.
+	Version string
+	// TrustProxy uses X-Forwarded-For for rate limiting.
+	TrustProxy bool
+	// PruneFunc, BackupFunc power the admin endpoints. Optional.
+	PruneFunc func(ctx context.Context, before time.Time, opt store.PruneOptions) (int64, error)
+
+	health         healthCache
+	ingestMu       sync.Mutex
+	ingestLimiter  rateLimiter
+	ingestCalls    atomic.Int64
+	ingestRequests atomic.Int64
+	generation     atomic.Int64
+	cache          payloadCache
 }
+
+// PriceFunc prices one call from its token counts. out includes reasoning.
+type PriceFunc func(model string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool)
+
+// bumpGeneration invalidates cached page payloads after a write.
+func (s *Server) bumpGeneration() { s.generation.Add(1) }
 
 // New builds a Server.
 func New(st *store.Store, log *slog.Logger) (*Server, error) {
@@ -68,7 +99,8 @@ func New(st *store.Store, log *slog.Logger) (*Server, error) {
 		log = slog.Default()
 	}
 	return &Server{store: st, log: log, tmpl: tmpl, Generated: time.Now,
-		HealthCacheTTL: healthCacheTTL}, nil
+		HealthCacheTTL: healthCacheTTL, IngestEnabled: true,
+		ingestLimiter: rateLimiter{rate: 20, burst: 100}}, nil
 }
 
 // Handler returns the HTTP handler for the dashboard.
@@ -81,13 +113,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/reprice", s.handleReprice)
+	mux.HandleFunc("/api/admin/prune", s.handleAdminPrune)
+	mux.HandleFunc("/api/admin/forget-session", s.handleAdminForgetSession)
+	mux.HandleFunc("/api/admin/rename-machine", s.handleAdminRenameMachine)
 	mux.HandleFunc("/api/sessions", s.handleSessionsAPI)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.Handle("/session", http.HandlerFunc(s.handleSession))
 	// Outermost, so the headers are on every response the dashboard produces —
 	// including the assets, which is where a policy that only covered documents
 	// would be one bypass away from useless.
-	return withSecurityHeaders(logRequests(s.log, mux))
+	return withSecurityHeaders(withRequestGuards(logRequests(s.log, mux)))
 }
 
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
@@ -170,7 +205,21 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := s.buildPayload(ctx, filter, r.URL.Query())
+	var data pageData
+	var err2 error
+	gen := ""
+	cached := false
+	if s.CachePayloads {
+		gen = s.dataGeneration()
+		data, cached = s.cache.get(r.URL.RawQuery, gen, time.Now())
+	}
+	if !cached {
+		data, err2 = s.buildPayload(ctx, filter, r.URL.Query())
+		if err2 == nil && s.CachePayloads {
+			s.cache.put(r.URL.RawQuery, gen, time.Now(), data)
+		}
+	}
+	err = err2
 	if err != nil {
 		s.log.Error("could not build dashboard", "error", err)
 		s.errorPage(w, http.StatusInternalServerError, "Could not read the database",
@@ -557,4 +606,50 @@ func parseFilterState(query url.Values) filterState {
 		return filterState{}
 	}
 	return state
+}
+
+// payloadCache keeps the most recent rendered payloads, keyed by the query and
+// the data generation, so repeated page loads between scans skip the dozen
+// rollups a page costs.
+type payloadCache struct {
+	mu      sync.Mutex
+	entries map[string]cachedPayload
+}
+
+type cachedPayload struct {
+	gen  string
+	at   time.Time
+	data pageData
+}
+
+const payloadCacheTTL = 30 * time.Second
+
+func (c *payloadCache) get(key, gen string, now time.Time) (pageData, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok || e.gen != gen || now.Sub(e.at) > payloadCacheTTL {
+		return pageData{}, false
+	}
+	return e.data, true
+}
+
+func (c *payloadCache) put(key, gen string, now time.Time, d pageData) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil || len(c.entries) > 64 {
+		c.entries = map[string]cachedPayload{}
+	}
+	c.entries[key] = cachedPayload{gen: gen, at: now, data: d}
+}
+
+// dataGeneration changes whenever stored data may have: an ingest or admin
+// write bumps the counter, and a completed scan pass moves lastRun.
+func (s *Server) dataGeneration() string {
+	g := fmt.Sprint(s.generation.Load())
+	if s.ScanInfo != nil {
+		last, _ := s.ScanInfo()
+		g += ":" + fmt.Sprint(last.UnixNano())
+	}
+	return g
 }
