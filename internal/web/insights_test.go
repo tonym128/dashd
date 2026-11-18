@@ -113,6 +113,19 @@ func TestBuildInsightsFromStoreAndRender(t *testing.T) {
 	if !strings.Contains(body, "Key Insights") || !strings.Contains(body, "Usage Insights") {
 		t.Errorf("expected rendered page to contain Key Insights and Usage Insights sections")
 	}
+
+	// Budget threshold insights fire when spend exceeds configured budgets.
+	budgetInsights := BuildInsightsWithBudgets(store.InsightSignals{}, store.Totals{Calls: 1}, []burnWindow{
+		{Label: "Today", Cost: 12.0, Days: 1},
+		{Label: "Month to date", Cost: 120.0, Days: 18},
+	}, 10.0, 100.0)
+	bids := map[string]bool{}
+	for _, in := range budgetInsights {
+		bids[in.ID] = true
+	}
+	if !bids["daily-budget-over"] || !bids["monthly-budget-over"] {
+		t.Errorf("expected daily-budget-over and monthly-budget-over, got %v", bids)
+	}
 }
 
 func fmtKey(prefix string, i int) string {

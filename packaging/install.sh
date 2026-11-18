@@ -66,6 +66,10 @@ mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$CONFIG_DIR"
 if [[ -n "$LOCAL_BIN" ]]; then
   cp "$LOCAL_BIN" "$INSTALL_DIR/dashd"
   chmod 0755 "$INSTALL_DIR/dashd"
+  SIBLING_MODELS="$(dirname "$LOCAL_BIN")/models.json"
+  if [[ -f "$SIBLING_MODELS" ]]; then
+    install -m 0644 "$SIBLING_MODELS" "$DATA_DIR/models.json"
+  fi
   echo "Installed local binary to $INSTALL_DIR/dashd"
 else
   echo "Fetching latest release metadata from GitHub ($REPO)..."

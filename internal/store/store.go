@@ -906,6 +906,36 @@ func (s *Store) RecordMachineHeartbeat(machine string, sessionsPushed, callsPush
 	return err
 }
 
+// PruneBefore deletes call and tool_call rows older than before, removes
+// sessions left with zero calls, and runs VACUUM to reclaim disk space.
+func (s *Store) PruneBefore(ctx context.Context, before time.Time) (int64, error) {
+	cutoff := before.Unix()
+	var deleted int64
+	err := s.InTx(func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM call WHERE ts > 0 AND ts < ?`, cutoff)
+		if err != nil {
+			return fmt.Errorf("prune calls: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		deleted = n
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM tool_call WHERE ts > 0 AND ts < ?`, cutoff); err != nil {
+			return fmt.Errorf("prune tool_calls: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM session WHERE NOT EXISTS (SELECT 1 FROM call c WHERE c.session_uid = session.uid)`); err != nil {
+			return fmt.Errorf("prune empty sessions: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx, `VACUUM`); err != nil {
+		return deleted, fmt.Errorf("vacuum after prune: %w", err)
+	}
+	return deleted, nil
+}
+
 // ForgetSession removes a session and everything derived from it.
 func (s *Store) ForgetSession(uid string) error {
 	return s.InTx(func(tx *sql.Tx) error {

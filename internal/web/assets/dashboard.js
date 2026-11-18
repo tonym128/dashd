@@ -1545,6 +1545,9 @@ updateSortIcons('tools-table', toolSort);
             if (val) activeEntries.push({ key, label, val });
         });
     });
+    if (params.get('unpriced') === '1' || params.get('unpriced') === 'true') {
+        activeEntries.push({ key: 'unpriced', label: 'Status', val: 'unpriced' });
+    }
 
     if (badgeEl) {
         badgeEl.textContent = String(activeEntries.length);
@@ -1759,6 +1762,70 @@ updateSortIcons('tools-table', toolSort);
                 if (bar) showTip(bar, e.clientX || 20, e.clientY || 80);
                 else hideTip();
             });
+        });
+    }
+
+    // CSV export helpers
+    function downloadCSV(filename, headers, rows) {
+        const csvEscape = v => {
+            const s = String(v == null ? '' : v);
+            return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        };
+        const lines = [headers.map(csvEscape).join(',')];
+        rows.forEach(r => lines.push(r.map(csvEscape).join(',')));
+        const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    const exportSessionsBtn = document.getElementById('export-sessions-csv');
+    if (exportSessionsBtn && exportSessionsBtn.addEventListener) {
+        exportSessionsBtn.addEventListener('click', () => {
+            const rows = [];
+            (dashboardData.projects || []).forEach(p => {
+                (p.sessions_list || []).forEach(s => {
+                    rows.push([s.cwd, p.agent_cmd, s.machine || '', s.start_display, s.duration, s.llm_time, s.tool_time, s.messages, s.tokens, Number(s.cost || 0).toFixed(4)]);
+                });
+            });
+            downloadCSV('dashd-sessions.csv', ['Project', 'Agent', 'Machine', 'Started', 'Duration(s)', 'LLM(s)', 'Tool(s)', 'Messages', 'Tokens', 'CostUSD'], rows);
+            showToast('Exported ' + rows.length + ' sessions');
+        });
+    }
+
+    const exportModelsBtn = document.getElementById('export-models-csv');
+    if (exportModelsBtn && exportModelsBtn.addEventListener) {
+        exportModelsBtn.addEventListener('click', () => {
+            const rows = (dashboardData.models || []).map(m => [
+                m.name, m.messages, m.tokens, m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_write_tokens, m.reasoning_tokens, Number(m.cost || 0).toFixed(4), Number(m.pct || 0).toFixed(2)
+            ]);
+            downloadCSV('dashd-models.csv', ['Model', 'Messages', 'TotalTokens', 'Input', 'Output', 'CacheRead', 'CacheWrite', 'Reasoning', 'CostUSD', 'SharePct'], rows);
+            showToast('Exported ' + rows.length + ' models');
+        });
+    }
+
+    // Manual reprice trigger in System tab
+    const repriceBtn = document.getElementById('reprice-btn');
+    if (repriceBtn && repriceBtn.addEventListener && typeof fetch === 'function') {
+        repriceBtn.addEventListener('click', () => {
+            repriceBtn.disabled = true;
+            repriceBtn.textContent = 'Repricing...';
+            fetch('/api/reprice', { method: 'POST' })
+                .then(r => r.ok ? r.json() : Promise.reject(new Error('status ' + r.status)))
+                .then(res => {
+                    showToast('Repriced ' + (res.repriced || 0) + ' calls');
+                    setTimeout(() => location.reload(), 600);
+                })
+                .catch(() => {
+                    showToast('Reprice failed');
+                    repriceBtn.disabled = false;
+                    repriceBtn.textContent = 'Reprice all calls';
+                });
         });
     }
 })();

@@ -47,9 +47,15 @@ type Server struct {
 	// ModelsPath, when set, is served at GET /api/models and advertised via
 	// models_etag in /api/ingest responses so push clients stay in sync.
 	ModelsPath string
+	// RepriceFunc, when set, powers POST /api/reprice.
+	RepriceFunc func(context.Context) (int, error)
+	// Optional soft spending thresholds for burn-rate alerts & insights.
+	DailyBudget   float64
+	MonthlyBudget float64
 
-	health   healthCache
-	ingestMu sync.Mutex
+	health        healthCache
+	ingestMu      sync.Mutex
+	ingestLimiter ingestRateLimiter
 }
 
 // New builds a Server.
@@ -74,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/activity", s.handleActivity)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/models", s.handleModels)
+	mux.HandleFunc("/api/reprice", s.handleReprice)
 	mux.Handle("/session", http.HandlerFunc(s.handleSession))
 	// Outermost, so the headers are on every response the dashboard produces —
 	// including the assets, which is where a policy that only covered documents
@@ -336,7 +343,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	now := s.Generated()
 	burn := burnWindows(daily, now)
 	machineViews := s.machineStatusViews(ctx, now)
-	insights := BuildInsights(signals, totals, burn)
+	insights := BuildInsightsWithBudgets(signals, totals, burn, s.DailyBudget, s.MonthlyBudget)
 	topInsights := insights
 	if len(topInsights) > 3 {
 		topInsights = topInsights[:3]
@@ -476,13 +483,14 @@ func writeJSON(w http.ResponseWriter, v any) {
 // ---------------------------------------------------------------- filtering
 
 type filterState struct {
-	Models   []string
-	Agents   []string
-	Projects []string
-	Machines []string
-	DateFrom string
-	DateTo   string
-	Active   bool
+	Models       []string
+	Agents       []string
+	Projects     []string
+	Machines     []string
+	UnpricedOnly bool
+	DateFrom     string
+	DateTo       string
+	Active       bool
 }
 
 func parseFilter(q url.Values) (store.Filter, filterState, error) {
@@ -497,23 +505,26 @@ func parseFilter(q url.Values) (store.Filter, filterState, error) {
 		}
 		return out
 	}
+	unpricedOnly := q.Get("unpriced") == "1" || q.Get("unpriced") == "true"
 	state := filterState{
-		Models:   multi("model"),
-		Agents:   multi("agent"),
-		Projects: multi("project"),
-		Machines: multi("machine"),
-		DateFrom: q.Get("date_from"),
-		DateTo:   q.Get("date_to"),
+		Models:       multi("model"),
+		Agents:       multi("agent"),
+		Projects:     multi("project"),
+		Machines:     multi("machine"),
+		UnpricedOnly: unpricedOnly,
+		DateFrom:     q.Get("date_from"),
+		DateTo:       q.Get("date_to"),
 	}
 	state.Active = len(state.Models) > 0 || len(state.Agents) > 0 ||
 		len(state.Projects) > 0 || len(state.Machines) > 0 ||
-		state.DateFrom != "" || state.DateTo != ""
+		state.UnpricedOnly || state.DateFrom != "" || state.DateTo != ""
 
 	filter := store.Filter{
-		Models:   state.Models,
-		Agents:   state.Agents,
-		Projects: state.Projects,
-		Machines: state.Machines,
+		Models:       state.Models,
+		Agents:       state.Agents,
+		Projects:     state.Projects,
+		Machines:     state.Machines,
+		UnpricedOnly: state.UnpricedOnly,
 	}
 
 	// A date is interpreted in the reader's own timezone, and a "to" date

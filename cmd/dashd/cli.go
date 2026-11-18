@@ -26,7 +26,7 @@ const defaultCommand = "serve-and-scan"
 // commands is the complete set. It is a slice rather than inline cases in a
 // switch so that the same list can be printed in the error message and the
 // usage text, which is the only way those two stay in agreement.
-var commands = []string{"serve-and-scan", "serve", "scan", "push", "reprice", "update-models", "doctor", "insights", "stats"}
+var commands = []string{"serve-and-scan", "serve", "scan", "push", "reprice", "prune", "update-models", "doctor", "insights", "stats"}
 
 // options is the parsed command line.
 type options struct {
@@ -40,6 +40,9 @@ type options struct {
 	machine       string
 	remote        string
 	once          bool
+	before        string
+	dailyBudget   float64
+	monthlyBudget float64
 	// authToken is empty unless -auth-token was given, which means "no
 	// authentication", not "authentication with an empty secret".
 	authToken   string
@@ -74,6 +77,12 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 		"remote dashd base URL for 'push' (e.g. https://dashd.example.com; also DASHD_REMOTE)")
 	fs.BoolVar(&o.once, "once", false,
 		"for 'push', run a single pass and exit instead of looping on -interval")
+	fs.StringVar(&o.before, "before", "",
+		"for 'prune', delete calls older than this YYYY-MM-DD date")
+	fs.Float64Var(&o.dailyBudget, "daily-budget", 0,
+		"optional soft daily spending budget in USD for alerts/insights")
+	fs.Float64Var(&o.monthlyBudget, "monthly-budget", 0,
+		"optional soft monthly spending budget in USD for alerts/insights")
 	fs.StringVar(&o.authToken, "auth-token", "",
 		"require/send this bearer token (also DASHD_AUTH_TOKEN); empty disables authentication")
 	fs.StringVar(&o.ingestToken, "ingest-token", "",
@@ -167,6 +176,7 @@ Commands:
   scan            one scan pass, print totals, exit (for cron or a timer)
   push            scan local logs and push updates to a remote dashd server
   reprice         re-cost every stored call with the current price dump
+  prune           delete calls older than -before YYYY-MM-DD and vacuum the DB
   update-models   download the latest OpenRouter model pricing to -models
   doctor          check local agent logs, pricing, database, and remote server
   insights        print plain-English usage and cost insights from the database

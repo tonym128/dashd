@@ -15,12 +15,13 @@ import (
 // Values are matched by the same normalisation the parsers apply to model names,
 // so a filter typed by hand matches what the page displays.
 type Filter struct {
-	Models   []string
-	Agents   []string
-	Projects []string
-	Machines []string
-	DateFrom *time.Time
-	DateTo   *time.Time
+	Models       []string
+	Agents       []string
+	Projects     []string
+	Machines     []string
+	UnpricedOnly bool
+	DateFrom     *time.Time
+	DateTo       *time.Time
 }
 
 // whereExtra builds the WHERE clause with additional leading bounds, in the
@@ -67,6 +68,9 @@ func (f Filter) whereExtra(colPrefix, tsCol string, bounds ...string) (string, [
 		for _, mc := range f.Machines {
 			args = append(args, mc)
 		}
+	}
+	if f.UnpricedOnly {
+		clauses = append(clauses, p("priced")+" = 0")
 	}
 	// A record with no timestamp is excluded from a date window rather than
 	// folded into the earliest day, which would invent activity on a date the
@@ -154,6 +158,10 @@ func (f Filter) whereToolCall(colPrefix string) (string, []any) {
 			args = append(args, mc)
 		}
 	}
+	if f.UnpricedOnly {
+		clauses = append(clauses,
+			"EXISTS (SELECT 1 FROM call uc WHERE uc.session_uid = "+p("session_uid")+" AND uc.priced = 0)")
+	}
 	if f.DateFrom != nil {
 		clauses = append(clauses, p("ts")+" >= ? AND "+p("ts")+" > 0")
 		args = append(args, f.DateFrom.Unix())
@@ -211,6 +219,10 @@ func (f Filter) whereSession(colPrefix string) (string, []any) {
 		for _, mc := range f.Machines {
 			args = append(args, mc)
 		}
+	}
+	if f.UnpricedOnly {
+		clauses = append(clauses,
+			"EXISTS (SELECT 1 FROM call uc WHERE uc.session_uid = "+p("uid")+" AND uc.priced = 0)")
 	}
 	if f.DateFrom != nil {
 		clauses = append(clauses, p("last_ts")+" >= ? AND "+p("last_ts")+" > 0")

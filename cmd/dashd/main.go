@@ -207,6 +207,21 @@ func run(o options, command string, stdout io.Writer) error {
 		log.Info("repriced", "calls", n, "prices", o.models)
 		return printStats(st, stdout)
 
+	case "prune":
+		if o.before == "" {
+			return fmt.Errorf("-before YYYY-MM-DD is required for prune")
+		}
+		cutoff, err := time.ParseInLocation("2006-01-02", o.before, time.Local)
+		if err != nil {
+			return fmt.Errorf("invalid -before date %q: %w", o.before, err)
+		}
+		n, err := st.PruneBefore(ctx, cutoff)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "pruned %d calls before %s\n", n, o.before)
+		return nil
+
 	case "stats":
 		return printStats(st, stdout)
 
@@ -230,6 +245,13 @@ func run(o options, command string, stdout io.Writer) error {
 		return err
 	}
 	srv.ModelsPath = o.models
+	srv.DailyBudget = o.dailyBudget
+	srv.MonthlyBudget = o.monthlyBudget
+	srv.RepriceFunc = func(rctx context.Context) (int, error) {
+		return st.Reprice(rctx, func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
+			return pricer.CostCall(m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
+		})
+	}
 	srv.ScanInfo = scanner.Status
 
 	ctx, cancel := context.WithCancel(ctx)

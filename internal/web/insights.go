@@ -25,10 +25,38 @@ type Insight struct {
 // into ordered, readable insights. Both the web UI and `dashd insights` CLI
 // use this same generator.
 func BuildInsights(sig store.InsightSignals, totals store.Totals, burn []burnWindow) []Insight {
+	return BuildInsightsWithBudgets(sig, totals, burn, 0, 0)
+}
+
+// BuildInsightsWithBudgets behaves like BuildInsights and also flags daily or
+// monthly budget overruns when positive budgets are configured.
+func BuildInsightsWithBudgets(sig store.InsightSignals, totals store.Totals, burn []burnWindow, dailyBudget, monthlyBudget float64) []Insight {
 	if totals.Calls == 0 {
 		return nil
 	}
 	var out []Insight
+
+	// 0. Budget threshold alerts (when configured).
+	for _, b := range burn {
+		if dailyBudget > 0 && b.Label == "Today" && b.Cost > dailyBudget {
+			out = append(out, Insight{
+				ID:       "daily-budget-over",
+				Category: "Cost & Burn",
+				Severity: "warn",
+				Headline: fmt.Sprintf("Today's spend ($%.2f) exceeds your $%.2f daily budget", b.Cost, dailyBudget),
+				Detail:   fmt.Sprintf("Currently %.0f%% of your configured daily soft budget.", b.Cost/dailyBudget*100),
+			})
+		}
+		if monthlyBudget > 0 && b.Label == "Month to date" && b.Cost > monthlyBudget {
+			out = append(out, Insight{
+				ID:       "monthly-budget-over",
+				Category: "Cost & Burn",
+				Severity: "warn",
+				Headline: fmt.Sprintf("Month-to-date spend ($%.2f) exceeds your $%.2f monthly budget", b.Cost, monthlyBudget),
+				Detail:   fmt.Sprintf("Currently %.0f%% of your configured monthly soft budget.", b.Cost/monthlyBudget*100),
+			})
+		}
+	}
 
 	// 1. Unpriced calls warning (highest priority data-quality signal).
 	if totals.UnpricedCalls > 0 {
@@ -37,11 +65,13 @@ func BuildInsights(sig store.InsightSignals, totals store.Totals, burn []burnWin
 			top = fmt.Sprintf(" Top unpriced: %s (%d calls).", sig.Unpriced[0].Model, sig.Unpriced[0].Calls)
 		}
 		out = append(out, Insight{
-			ID:       "unpriced-calls",
-			Category: "Data Health",
-			Severity: "warn",
-			Headline: fmt.Sprintf("%s unpriced calls are excluded from cost totals", groupInt64(int64(totals.UnpricedCalls))),
-			Detail:   "These calls count tokens but show $0.00 until a rate is known." + top + " Run `dashd update-models` and `dashd reprice`.",
+			ID:          "unpriced-calls",
+			Category:    "Data Health",
+			Severity:    "warn",
+			Headline:    fmt.Sprintf("%s unpriced calls are excluded from cost totals", groupInt64(int64(totals.UnpricedCalls))),
+			Detail:      "These calls count tokens but show $0.00 until a rate is known." + top + " Run `dashd update-models` and `dashd reprice`.",
+			ActionLabel: "Show unpriced calls",
+			ActionURL:   "/?unpriced=1",
 		})
 	}
 

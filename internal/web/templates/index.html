@@ -302,6 +302,7 @@
              aria-label="Filter sessions">
       <span class="table-count" id="sessions-shown"></span>
       <div class="pager">
+        <button id="export-sessions-csv" type="button" title="Download visible sessions as CSV">Export CSV</button>
         <button id="sessions-prev" type="button">&larr; Newer</button>
         <button id="sessions-next" type="button">Older &rarr;</button>
       </div>
@@ -358,7 +359,10 @@
   </div>
 
   <div class="section" data-view-section="breakdown" data-breakdown-panel="models">
-    <div class="section-header"><span>Models</span></div>
+    <div class="section-header">
+      <span>Models</span>
+      <button id="export-models-csv" type="button" class="btn btn-secondary">Export CSV</button>
+    </div>
     <table id="models-table">
       <thead>
         <tr>
@@ -438,7 +442,10 @@
 
   {{if .Machines}}
   <div class="section" data-view-section="system">
-    <div class="section-header"><span>Connected Machines</span></div>
+    <div class="section-header">
+      <span>Connected Machines</span>
+      <button id="reprice-btn" type="button" class="btn btn-secondary">Reprice all calls</button>
+    </div>
     <table id="machines-status-table">
       <thead>
         <tr><th>Machine</th><th>Last push</th><th class="numeric">Sessions pushed</th><th class="numeric">Calls pushed</th></tr>
@@ -562,7 +569,7 @@
     <p class="subtitle"><a href="/">&larr; Back to dashboard</a></p>
     <h1>{{if .Session.Title}}{{.Session.Title}}{{else}}Session{{end}}</h1>
     <p class="subtitle">
-      {{.Session.Agent}} &middot; {{.Session.Project}}{{if .Session.Machine}} &middot; <span class="badge">{{.Session.Machine}}</span>{{end}} &middot;
+      {{.Session.Agent}} &middot; <a href="/?project={{.Session.Project}}">{{.Session.Project}}</a>{{if .Session.Machine}} &middot; <span class="badge">{{.Session.Machine}}</span>{{end}} &middot;
       generated {{.Generated}}
     </p>
   </header>
