@@ -125,6 +125,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+      # Keyless cosign signing of checksums.txt uses the workflow's OIDC token.
+      id-token: write
     # ghcr.io push. The GHCR token is the GITHUB_TOKEN with packages: write.
     steps:
       - name: Check out the repository
