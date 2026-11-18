@@ -7,16 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.1] - 2026-11-18
+## [0.9.2] - 2026-11-18
 
-The first published build of the 0.9 changes below: the v0.9.0 release run
-failed while signing and published nothing.
+The first published build of the 0.9 changes below: the v0.9.0 and v0.9.1
+release runs failed while signing and published nothing.
 
 ### Fixed
 
 - Release signing uses a cosign v3 Sigstore bundle
   (`checksums.txt.sigstore.json`); cosign v3 rejects the old separate
   signature and certificate flags.
+- The release job is granted `id-token: write`, which keyless signing needs.
+
+## [0.9.1] - 2026-11-18 [not published]
 
 ## [0.9.0] - 2026-11-18 [not published]
 

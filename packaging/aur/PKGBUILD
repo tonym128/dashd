@@ -5,7 +5,7 @@
 # archlinux package built by goreleaser (nfpms), installable with
 #   sudo pacman -U dashd_<version>_linux_amd64.pkg.tar.zst
 pkgname=dashd
-pkgver=0.9.1
+pkgver=0.9.2
 pkgrel=1
 pkgdesc="Self-hosted dashboard of what your coding agents cost"
 arch=('x86_64' 'aarch64')
