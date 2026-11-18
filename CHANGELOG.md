@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-18
+
+### Fixed
+
+- Signing in from a browser failed with "cross-origin login refused". Pages
+  were served with `Referrer-Policy: no-referrer`, under which browsers send
+  `Origin: null` on their own form submissions. The browser-set
+  `Sec-Fetch-Site` header now decides, `Origin` is only a fallback (and also
+  matches `X-Forwarded-Host` behind a proxy), and the policy is `same-origin`.
+
 ## [0.9.2] - 2026-11-18
 
 The first published build of the 0.9 changes below: the v0.9.0 and v0.9.1
