@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,80 +84,11 @@ func runExport(ctx context.Context, o options, st *store.Store, stdout io.Writer
 	}
 	switch o.format {
 	case "csv":
-		return writeCallsCSV(ctx, st, f, w)
+		return web.WriteCallsCSV(ctx, st, f, w)
 	case "json":
-		return writeCallsJSON(ctx, st, f, w)
+		return web.WriteCallsJSON(ctx, st, f, w)
 	}
 	return fmt.Errorf("-format %q: want csv or json", o.format)
-}
-
-// CallCSVHeader is the column order of a call export.
-var callCSVHeader = []string{"session_uid", "call_key", "agent", "project", "machine", "model", "time", "day",
-	"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens",
-	"total_tokens", "llm_seconds", "cost_usd", "priced", "ingested_at"}
-
-func writeCallsCSV(ctx context.Context, st *store.Store, f store.Filter, w io.Writer) error {
-	cw := csv.NewWriter(w)
-	if err := cw.Write(callCSVHeader); err != nil {
-		return err
-	}
-	err := st.ExportCalls(ctx, f, func(c store.ExportCall) error {
-		ts := ""
-		if c.TS > 0 {
-			ts = time.Unix(c.TS, 0).Format(time.RFC3339)
-		}
-		ing := ""
-		if c.IngestedAt > 0 {
-			ing = time.Unix(c.IngestedAt, 0).Format(time.RFC3339)
-		}
-		return cw.Write([]string{c.SessionUID, c.CallKey, c.Agent, csvSafe(c.Project), csvSafe(c.Machine), csvSafe(c.Model), ts, c.Day,
-			strconv.FormatInt(c.InputTokens, 10), strconv.FormatInt(c.OutputTokens, 10),
-			strconv.FormatInt(c.CacheReadTokens, 10), strconv.FormatInt(c.CacheWriteTokens, 10),
-			strconv.FormatInt(c.ReasoningTokens, 10), strconv.FormatInt(c.TotalTokens, 10),
-			strconv.FormatFloat(c.LLMSeconds, 'f', 3, 64), strconv.FormatFloat(c.CostUSD, 'f', 6, 64),
-			strconv.FormatBool(c.Priced), ing})
-	})
-	if err != nil {
-		return err
-	}
-	cw.Flush()
-	return cw.Error()
-}
-
-// csvSafe defuses spreadsheet formula injection: a cell that starts with = + -
-// @ is run as a formula by Excel and Sheets, and project paths and model ids
-// come from logs.
-func csvSafe(s string) string {
-	if s != "" && strings.ContainsRune("=+-@\t\r", rune(s[0])) {
-		return "'" + s
-	}
-	return s
-}
-
-func writeCallsJSON(ctx context.Context, st *store.Store, f store.Filter, w io.Writer) error {
-	if _, err := io.WriteString(w, "[\n"); err != nil {
-		return err
-	}
-	first := true
-	err := st.ExportCalls(ctx, f, func(c store.ExportCall) error {
-		b, err := json.Marshal(c)
-		if err != nil {
-			return err
-		}
-		if !first {
-			if _, err := io.WriteString(w, ",\n"); err != nil {
-				return err
-			}
-		}
-		first = false
-		_, err = w.Write(b)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	_, err = io.WriteString(w, "\n]\n")
-	return err
 }
 
 func runDigest(ctx context.Context, o options, st *store.Store, out io.Writer) error {

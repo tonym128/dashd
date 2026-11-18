@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agent Cost Dashboard</title>
+<title>{{if .FilterState.Active}}Filtered · {{end}}dashd · agent costs</title>
 <link rel="stylesheet" href="/assets/dashboard.css">
 </head>
 <body>
@@ -18,12 +18,23 @@
       <span class="scan-status-pill" title="{{.ScanSummary}}">{{.ScanSummary}}</span>
     </div>
     <div class="topbar-actions">
-      <span class="generated-meta">Updated {{.Generated}}</span>
+      <span class="generated-meta" id="generated-meta" data-epoch="{{.GeneratedEpoch}}" title="Data as of {{.Generated}}">Updated {{.Generated}}</span>
+      <label class="visually-hidden" for="auto-refresh">Auto-refresh</label>
+      <select id="auto-refresh" class="btn btn-secondary auto-refresh" title="Reload the page on a timer, for an always-open tab">
+        <option value="0">Auto-refresh: off</option>
+        <option value="60">Every 1 min</option>
+        <option value="300">Every 5 min</option>
+        <option value="900">Every 15 min</option>
+      </select>
       <button type="button" id="filter-toggle" class="btn btn-secondary" aria-expanded="{{if .FilterState.Active}}true{{else}}false{{end}}" aria-controls="filter-panel">
         Filters <span id="filter-badge" class="pill-count" hidden>0</span>
       </button>
       <button type="button" data-reload class="btn btn-secondary" title="Reload latest data (r)">Refresh</button>
       <button type="button" id="theme-toggle" class="btn btn-icon" aria-label="Toggle light/dark theme" title="Toggle light/dark theme">&#9788;</button>
+      <button type="button" id="shortcuts-help" class="btn btn-icon" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
+      {{if .AuthEnabled}}
+      <form method="post" action="/logout" class="logout-form"><button type="submit" class="btn btn-secondary" title="Sign out of this browser">Sign out</button></form>
+      {{end}}
     </div>
   </div>
 </div>
@@ -32,16 +43,14 @@
   <header class="page-header">
     <div class="page-header-row">
       <div>
-        <h1>Agent Cost Dashboard</h1>
-        <p class="subtitle">Generated on {{.Generated}}</p>
+        <h1>Agent costs</h1>
       </div>
       <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Dashboard views">
-        <button type="button" class="view-tab is-active" role="tab" aria-selected="true" data-view-tab="overview">Overview</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="insights">Insights{{if .Insights}} ({{len .Insights}}){{end}}</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="sessions">Sessions</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="breakdown">Breakdowns</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="system">System</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view-tab="all">All</button>
+        <button type="button" class="view-tab is-active" role="tab" aria-selected="true" aria-controls="main-panel" id="tab-overview" data-view-tab="overview">Overview</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-insights" tabindex="-1" data-view-tab="insights">Insights{{if .Insights}} ({{len .Insights}}){{end}}</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-sessions" tabindex="-1" data-view-tab="sessions">Sessions</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-breakdown" tabindex="-1" data-view-tab="breakdown">Breakdowns</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-system" tabindex="-1" data-view-tab="system">System</button>
       </nav>
     </div>
   </header>
@@ -56,12 +65,20 @@
       <button type="button" class="preset-btn" data-date-preset="all">All time</button>
     </div>
     <div class="active-filter-chips" id="active-filter-chips"></div>
+    <div class="saved-views">
+      <label class="visually-hidden" for="saved-views">Saved views</label>
+      <select id="saved-views" class="btn btn-secondary" title="Saved filter combinations (stored in this browser)">
+        <option value="">Saved views…</option>
+      </select>
+      <button type="button" id="save-view" class="btn btn-secondary" title="Save the current filters as a named view">Save view</button>
+      <button type="button" id="delete-view" class="btn btn-secondary" title="Delete the selected saved view" hidden>Delete</button>
+    </div>
   </div>
 
   <div class="filter-bar{{if not .FilterState.Active}} is-collapsed{{end}}" id="filter-panel">
     <form method="get" action="/" id="filter-form">
       <div class="filter-group">
-        <label for="model">Model <span class="hint">(Ctrl/Cmd for multi)</span></label>
+        <label for="model">Model</label>
         <select name="model" id="model" multiple size="5">
           {{range .Facets.Models}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
@@ -84,10 +101,18 @@
           {{range .Facets.Machines}}<option value="{{.}}">{{.}}</option>{{end}}
         </select>
       </div>
+      {{if .Facets.Tags}}
+      <div class="filter-group">
+        <label for="tag">Tag</label>
+        <select name="tag" id="tag" multiple size="5">
+          {{range .Facets.Tags}}<option value="{{.}}">{{.}}</option>{{end}}
+        </select>
+      </div>
+      {{end}}
       <div class="filter-group filter-dates">
         <label for="date_from">Date from</label>
         <input type="date" name="date_from" id="date_from" min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}">
-        <label for="date_to" style="margin-top:8px">Date to</label>
+        <label for="date_to" class="date-to-label">Date to</label>
         <input type="date" name="date_to" id="date_to" min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}">
       </div>
       <div class="filter-actions">
@@ -99,6 +124,24 @@
       </div>
     </form>
   </div>
+
+  <main id="main-panel" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
+
+  {{if .Empty}}
+  <div class="section onboarding" data-view-section="overview">
+    <div class="section-header"><span>Welcome to dashd</span></div>
+    <div class="onboarding-body">
+      <p>No usage has been recorded yet. dashd fills itself from your coding agents' own logs, or from other machines that push to it.</p>
+      <ol>
+        <li><strong>On this machine:</strong> run <code>dashd scan</code> (or keep <code>dashd serve-and-scan</code> running). The Sources table below shows which agents were found and where dashd looked.</li>
+        <li><strong>From other machines:</strong> start this server with <code>-ingest-token</code>, then on each machine run
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/tonym128/dashd/main/packaging/install.sh | bash</code></pre>
+          or on Windows <code>irm https://raw.githubusercontent.com/tonym128/dashd/main/packaging/install.ps1 | iex</code>.</li>
+        <li><strong>Pricing:</strong> run <code>dashd update-models</code> so every model is priced.</li>
+      </ol>
+    </div>
+  </div>
+  {{end}}
 
   {{if .SourcesNeedAction}}
   <div class="section source-panel" data-view-section="overview system">
@@ -182,6 +225,14 @@
     </div>
   </div>
   {{end}}
+
+  <div class="section" data-view-section="overview" id="comparison-section">
+    <div class="section-header">
+      <span>Compared with the previous period</span>
+      <span class="badge" id="comparison-badge"></span>
+    </div>
+    <div class="comparison" id="comparison-content"></div>
+  </div>
 
   <div class="section" data-view-section="insights">
     <div class="section-header">
@@ -281,8 +332,9 @@
 
   <div class="section" data-view-section="overview">
     <div class="section-header">
-      <span>Daily Spending</span>
-      <div class="sub-tabs" id="daily-rollup-tabs" style="margin-bottom:0" role="tablist" aria-label="Spending rollup">
+      <span>Daily Spending <span class="badge tz-badge" id="tz-badge" title="Calls are bucketed into calendar days in this timezone"></span></span>
+      <a class="btn btn-secondary btn-small" data-export="daily" href="/api/export?kind=daily">Export</a>
+      <div class="sub-tabs sub-tabs-flush" id="daily-rollup-tabs" role="tablist" aria-label="Spending rollup">
         <button type="button" class="sub-tab is-active" role="tab" aria-selected="true" data-daily-rollup="daily">Daily</button>
         <button type="button" class="sub-tab" role="tab" aria-selected="false" data-daily-rollup="weekly">Weekly</button>
         <button type="button" class="sub-tab" role="tab" aria-selected="false" data-daily-rollup="monthly">Monthly</button>
@@ -298,11 +350,12 @@
     </div>
     <div class="table-toolbar">
       <input type="search" id="sessions-search" class="table-search"
-             placeholder="Filter by project, path, or agent&hellip; (press /)"
+             placeholder="Search project, path, title, agent or machine&hellip; (press /)"
              aria-label="Filter sessions">
       <span class="table-count" id="sessions-shown"></span>
       <div class="pager">
-        <button id="export-sessions-csv" type="button" title="Download visible sessions as CSV">Export CSV</button>
+        <a id="export-sessions-csv" class="btn btn-secondary" data-export="sessions" href="/api/export?kind=sessions" title="Download every session matching the filters as CSV">Export CSV</a>
+        <a class="btn btn-secondary" data-export="calls" href="/api/export?kind=calls" title="Download every individual call matching the filters as CSV">Export calls</a>
         <button id="sessions-prev" type="button">&larr; Newer</button>
         <button id="sessions-next" type="button">Older &rarr;</button>
       </div>
@@ -333,6 +386,7 @@
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="projects">Projects</button>
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="machines">Machines</button>
     <button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="tools">Tools</button>
+    {{if .Facets.Tags}}<button type="button" class="sub-tab" role="tab" aria-selected="false" data-breakdown-tab="tags">Tags</button>{{end}}
     <button type="button" class="sub-tab" id="compact-tables-toggle" aria-pressed="false" title="Hide secondary token columns on narrow screens">Compact columns</button>
   </div>
 
@@ -361,7 +415,7 @@
   <div class="section" data-view-section="breakdown" data-breakdown-panel="models">
     <div class="section-header">
       <span>Models</span>
-      <button id="export-models-csv" type="button" class="btn btn-secondary">Export CSV</button>
+      <a id="export-models-csv" class="btn btn-secondary" data-export="models" href="/api/export?kind=models">Export CSV</a>
     </div>
     <table id="models-table">
       <thead>
@@ -376,6 +430,8 @@
           <th class="numeric" data-sort="reasoning_tokens">Reasoning <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="avg_tps">Tokens/s <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="cost">Cost <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="per_call">$/call <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="per_1k_output">$/1K out <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="pct">Share <span class="sort-icon">▼</span></th>
         </tr>
       </thead>
@@ -384,7 +440,7 @@
   </div>
 
   <div class="section" data-view-section="breakdown" data-breakdown-panel="tools">
-    <div class="section-header"><span>Tool Usage</span></div>
+    <div class="section-header"><span>Tool Usage</span><a class="btn btn-secondary" data-export="tools" href="/api/export?kind=tools">Export CSV</a></div>
     <table id="tools-table">
       <thead>
         <tr>
@@ -401,7 +457,7 @@
   </div>
 
   <div class="section" data-view-section="breakdown" data-breakdown-panel="projects">
-    <div class="section-header"><span>Projects</span></div>
+    <div class="section-header"><span>Projects</span><a class="btn btn-secondary" data-export="projects" href="/api/export?kind=projects">Export CSV</a></div>
     <table id="projects-table">
       <thead>
         <tr>
@@ -413,6 +469,7 @@
           <th class="numeric" data-sort="tool_time">Tool Time <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="avg_tps">Tokens/s <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="cost">Cost <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="per_session">$/session <span class="sort-icon">▼</span></th>
           <th data-sort="last_activity">Last Activity <span class="sort-icon">▼</span></th>
         </tr>
       </thead>
@@ -421,7 +478,7 @@
   </div>
 
   <div class="section" data-view-section="breakdown" data-breakdown-panel="machines">
-    <div class="section-header"><span>Machines</span></div>
+    <div class="section-header"><span>Machines</span><a class="btn btn-secondary" data-export="machines" href="/api/export?kind=machines">Export CSV</a></div>
     <table id="machines-table">
       <thead>
         <tr>
@@ -433,6 +490,7 @@
           <th class="numeric" data-sort="output_tokens">Output <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="cache_read_tokens">Cache Read <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="cost">Cost <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="per_session">$/session <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="pct">Share <span class="sort-icon">▼</span></th>
         </tr>
       </thead>
@@ -440,21 +498,42 @@
     </table>
   </div>
 
+  {{if .Facets.Tags}}
+  <div class="section" data-view-section="breakdown" data-breakdown-panel="tags">
+    <div class="section-header"><span>Tags</span><a class="btn btn-secondary" data-export="tags" href="/api/export?kind=tags">Export CSV</a></div>
+    <table id="tags-table">
+      <thead>
+        <tr>
+          <th>Tag</th>
+          <th class="numeric">Projects</th>
+          <th class="numeric">Sessions</th>
+          <th class="numeric">Calls</th>
+          <th class="numeric">Cost</th>
+          <th class="numeric">$/session</th>
+          <th class="numeric">Share</th>
+        </tr>
+      </thead>
+      <tbody id="tags-tbody"></tbody>
+    </table>
+  </div>
+  {{end}}
+
   {{if .Machines}}
   <div class="section" data-view-section="system">
     <div class="section-header">
       <span>Connected Machines</span>
-      <button id="reprice-btn" type="button" class="btn btn-secondary">Reprice all calls</button>
     </div>
     <table id="machines-status-table">
       <thead>
-        <tr><th>Machine</th><th>Last push</th><th class="numeric">Sessions pushed</th><th class="numeric">Calls pushed</th></tr>
+        <tr><th>Machine</th><th>Status</th><th>Last push</th><th>Version</th><th class="numeric">Sessions pushed</th><th class="numeric">Calls pushed</th></tr>
       </thead>
       <tbody>
         {{range .Machines}}
-        <tr>
+        <tr{{if or .LastError .Stale}} class="source-attention"{{end}}>
           <td>{{.Machine}}</td>
+          <td>{{if .LastError}}<span class="scan-error" title="{{.LastError}}">failing ({{.LastErrorAgo}})</span>{{else if .Stale}}<span class="source-state source-missing">quiet</span>{{else}}<span class="source-state source-found">ok</span>{{end}}</td>
           <td>{{.LastSeenAgo}}</td>
+          <td>{{if .Version}}{{.Version}}{{else}}&ndash;{{end}}</td>
           <td class="numeric">{{.SessionsPushed}}</td>
           <td class="numeric">{{.CallsPushed}}</td>
         </tr>
@@ -463,6 +542,37 @@
     </table>
   </div>
   {{end}}
+
+  <div class="section" data-view-section="system" id="admin-section">
+    <div class="section-header"><span>Maintenance</span><span class="badge">admin</span></div>
+    <div class="admin-grid">
+      <div class="admin-card">
+        <h3>Reprice</h3>
+        <p>Recompute every stored cost from the current price table, after <code>dashd update-models</code>.</p>
+        <button id="reprice-btn" type="button" class="btn btn-secondary">Reprice all calls</button>
+      </div>
+      <form class="admin-card" id="admin-prune-form">
+        <h3>Prune history</h3>
+        <p>Delete calls before a date. A log that still exists will not bring them back.</p>
+        <label for="prune-before">Delete calls before</label>
+        <input type="date" id="prune-before" required>
+        <label class="checkbox"><input type="checkbox" id="prune-vacuum"> Reclaim disk space (VACUUM)</label>
+        <button type="submit" class="btn btn-secondary">Prune</button>
+      </form>
+      <form class="admin-card" id="admin-rename-form">
+        <h3>Rename or merge a machine</h3>
+        <label for="rename-from">From</label>
+        <select id="rename-from">{{range .Facets.Machines}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+        <label for="rename-to">To</label>
+        <input type="text" id="rename-to" maxlength="64" pattern="[A-Za-z0-9._ -]+" required>
+        <button type="submit" class="btn btn-secondary">Rename</button>
+      </form>
+      <div class="admin-card">
+        <h3>Backup</h3>
+        <p>Run <code>dashd backup -out dashd.db.bak</code> on the server. It is safe while dashd is running.</p>
+      </div>
+    </div>
+  </div>
 
   {{if or .Scan (not .Machines)}}
   <div class="section" data-view-section="system">
@@ -482,18 +592,35 @@
           <td>{{if .Error}}<span class="scan-error">{{.Error}}</span>{{else}}ok{{end}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="6" style="text-align:center;color:var(--text-secondary)">The scanner has not run yet.</td></tr>
+        <tr><td colspan="6" class="empty-cell">The scanner has not run yet{{if .Machines}}; this server receives pushes instead{{end}}.</td></tr>
         {{end}}
       </tbody>
     </table>
   </div>
   {{end}}
 
+  </main>
+
   <footer class="refresh-note">
     Costs are priced from each agent's reported usage, falling back to published
     list prices. Every call is stored in SQLite, so history outlives the logs it
-    came from.
+    came from. <a href="?view=all" data-open-view="all">Show every section on one page</a>.
   </footer>
+</div>
+<div id="shortcuts-dialog" class="shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" hidden>
+  <div class="shortcuts-card">
+    <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+    <dl>
+      <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Overview, Insights, Sessions, Breakdowns, System</dd>
+      <dt><kbd>/</kbd></dt><dd>Search sessions</dd>
+      <dt><kbd>f</kbd></dt><dd>Open or close filters</dd>
+      <dt><kbd>r</kbd></dt><dd>Refresh</dd>
+      <dt><kbd>t</kbd></dt><dd>Toggle theme</dd>
+      <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close dialogs and the filter drawer</dd>
+    </dl>
+    <button type="button" class="btn btn-secondary" data-close-shortcuts>Close</button>
+  </div>
 </div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
@@ -506,6 +633,7 @@
   machines: {{jsonList .FilterState.Machines}}
 };</script>
 <script src="/assets/dashboard.js"></script>
+<script src="/assets/app.js"></script>
 <script nonce="{{.Nonce}}">
 (function() {
   // Prefill the filter form from the query, so a reload or a shared link shows
@@ -525,6 +653,8 @@
   if (a) mark(a, s.agents);
   if (p) mark(p, s.projects);
   if (mc && s.machines) mark(mc, s.machines);
+  var tg = document.getElementById('tag');
+  if (tg) mark(tg, q.getAll('tag'));
   if (q.get('date_from')) document.getElementById('date_from').value = q.get('date_from');
   if (q.get('date_to')) document.getElementById('date_to').value = q.get('date_to');
 })();
@@ -543,11 +673,11 @@
 </head>
 <body>
 <div class="container">
-  <div class="section" style="margin-top:40px">
+  <div class="section error-section">
     <div class="section-header"><span>{{.Code}} &middot; {{.Title}}</span></div>
-    <div class="content" style="padding:16px">
+    <div class="content error-content">
       <p>{{.Error}}</p>
-      <p style="margin-top:12px"><a href="/">&larr; Back to dashboard</a></p>
+      <p class="error-back"><a href="/">&larr; Back to dashboard</a></p>
     </div>
   </div>
 </div>
@@ -560,7 +690,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Session {{.Session.UID}}</title>
+<title>{{if .Session.Title}}{{.Session.Title}}{{else}}Session{{end}} · dashd</title>
 <link rel="stylesheet" href="/assets/dashboard.css">
 </head>
 <body>
@@ -569,9 +699,16 @@
     <p class="subtitle"><a href="/">&larr; Back to dashboard</a></p>
     <h1>{{if .Session.Title}}{{.Session.Title}}{{else}}Session{{end}}</h1>
     <p class="subtitle">
-      {{.Session.Agent}} &middot; <a href="/?project={{.Session.Project}}">{{.Session.Project}}</a>{{if .Session.Machine}} &middot; <span class="badge">{{.Session.Machine}}</span>{{end}} &middot;
+      {{.Session.Agent}} &middot; <a href="{{.ProjectURL}}" title="Filter the dashboard to this project">{{.Session.Project}}</a>{{if .Session.Machine}} &middot; <a class="badge" href="{{.MachineURL}}" title="Filter the dashboard to this machine">{{.Session.Machine}}</a>{{end}} &middot;
       generated {{.Generated}}
     </p>
+    <div class="session-actions">
+      {{if not .Session.Orphaned}}
+      <button type="button" class="btn btn-secondary" data-copy-text="{{.ResumeCmd}}" title="{{.ResumeCmd}}">Copy resume command</button>
+      {{end}}
+      <a class="btn btn-secondary" href="{{.ProjectURL}}&amp;view=sessions">Other sessions in this project</a>
+      <button type="button" class="btn btn-secondary btn-danger" data-forget-session="{{.Session.UID}}" title="Delete this session and its calls from the database (admin)">Forget session</button>
+    </div>
   </header>
 
   <div class="stats-grid">
@@ -581,7 +718,61 @@
     <div class="stat-card"><div class="label">LLM time</div><div class="value">{{.Session.LLMTime}}</div></div>
     <div class="stat-card"><div class="label">Tool time</div><div class="value">{{.Session.ToolTime}}</div></div>
     <div class="stat-card"><div class="label">Wall time</div><div class="value">{{.Session.Wall}}</div></div>
+    <div class="stat-card"><div class="label">Tool calls</div><div class="value">{{.Session.ToolCalls}}{{if .Session.ToolErrors}} <span class="scan-error">{{.Session.ToolErrors}} failed</span>{{end}}</div></div>
   </div>
+
+  {{if .Spark.OK}}
+  <div class="section">
+    <div class="section-header"><span>Cost over the session</span><span class="badge">{{.Spark.Max}} total</span></div>
+    <div class="content spark-wrap">
+      <svg class="spark" viewBox="0 0 300 60" preserveAspectRatio="none" role="img" aria-label="Cumulative cost over the session, rising to {{.Spark.Max}}">
+        <polyline points="{{.Spark.Points}}" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+      </svg>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .ModelSplit}}
+  <div class="section">
+    <div class="section-header"><span>Cost by model</span></div>
+    <table id="session-models-table">
+      <thead><tr><th>Model</th><th class="numeric">Calls</th><th class="numeric">Tokens</th><th class="numeric">Cost</th><th>Share</th></tr></thead>
+      <tbody>
+        {{range .ModelSplit}}
+        <tr>
+          <td>{{.Model}}</td><td class="numeric">{{.Calls}}</td><td class="numeric">{{.Tokens}}</td><td class="numeric">{{.Cost}}</td>
+          <td><div class="bar-container"><div class="bar-fill share-bar" data-width="{{.Width}}"></div></div> {{.Pct}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  {{if .ToolSummary}}
+  <div class="section">
+    <div class="section-header"><span>Tools</span><span class="badge">{{len .Tools}} calls</span></div>
+    <table id="session-tools-table">
+      <thead><tr><th>Tool</th><th class="numeric">Calls</th><th class="numeric">Errors</th><th class="numeric">Time</th></tr></thead>
+      <tbody>
+        {{range .ToolSummary}}
+        <tr><td>{{.Tool}}</td><td class="numeric">{{.Calls}}</td><td class="numeric">{{if .Errors}}<span class="scan-error">{{.Errors}}</span>{{else}}0{{end}}</td><td class="numeric">{{.Time}}</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+    <details class="content">
+      <summary>Every tool call</summary>
+      <table>
+        <thead><tr><th>Time</th><th>Tool</th><th class="numeric">Duration</th><th>Result</th></tr></thead>
+        <tbody>
+          {{range .Tools}}
+          <tr><td>{{.Time}}</td><td>{{.Tool}}</td><td class="numeric">{{.Seconds}}</td><td>{{if .IsError}}<span class="scan-error">error</span>{{else}}ok{{end}}</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </details>
+  </div>
+  {{end}}
 
   <div class="section">
     <div class="section-header">
@@ -595,7 +786,7 @@
           <th class="numeric">Output</th><th class="numeric">Cache read</th>
           <th class="numeric">Cache write</th><th class="numeric">Reasoning</th>
           <th class="numeric">Total</th><th class="numeric">LLM time</th>
-          <th class="numeric">Cost</th>
+          <th class="numeric">Cost</th><th title="How long after the call the server received it">Arrived</th>
         </tr>
       </thead>
       <tbody>
@@ -611,9 +802,10 @@
           <td class="numeric">{{.Total}}</td>
           <td class="numeric">{{.LLMTime}}</td>
           <td class="numeric">{{.Cost}}</td>
+          <td class="muted">{{.Ingested}}</td>
         </tr>
         {{else}}
-        <tr><td colspan="10" style="text-align:center;color:var(--text-secondary)">No calls recorded for this session.</td></tr>
+        <tr><td colspan="11" class="empty-cell">No calls recorded for this session.</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -623,13 +815,15 @@
     Stored in SQLite at scan time, so this breakdown remains available even if
     the session log has since been rotated away.
     {{if .Session.Orphaned}}
-    <p class="stat-note" style="margin-top:10px">
+    <p class="stat-note">
       This session's log file is no longer on disk, so its transcript cannot be
       shown. Every figure above is read from the stored calls and is unaffected.
     </p>
     {{end}}
   </footer>
 </div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/assets/session.js"></script>
 </body>
 </html>
 {{end}}

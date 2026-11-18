@@ -31,6 +31,8 @@ var sessionSortColumns = map[string]string{
 	"machine":  "s.machine",
 	"title":    "s.title",
 	"messages": "s.calls",
+	"tps":      "CASE WHEN s.llm_seconds > 0 THEN s.output_tokens / s.llm_seconds ELSE 0 END",
+	"errors":   "s.tool_errors",
 }
 
 // SessionsPage returns one page of sessions and the total number matching.

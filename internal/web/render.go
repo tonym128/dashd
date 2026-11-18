@@ -103,6 +103,10 @@ func modelsJSON(models []store.ModelStat, totalCost float64) []map[string]any {
 			"last_ts":            m.LastTS,
 			"unpriced":           m.Unpriced,
 			"pct":                pct,
+			"per_call":           ratio(m.Cost, float64(m.Calls)),
+			// Cost per thousand generated tokens (output plus reasoning), the
+			// figure that compares models' efficiency across workloads.
+			"per_1k_output": ratio(m.Cost*1000, float64(m.OutputTokens+m.ReasoningTokens)),
 		})
 	}
 	return out
@@ -147,14 +151,9 @@ func providersJSON(providers []model.ProviderStat) []map[string]any {
 // "Projects" card counts, which is the same figure from two different queries.
 func projectsJSON(
 	projects []store.ProjectStat,
-	sessions []store.SessionRow,
 	projectModels []store.ProjectModel,
 	projectTools []store.ProjectTool,
 ) []map[string]any {
-	sessionsBy := map[string][]map[string]any{}
-	for _, s := range sessions {
-		sessionsBy[s.Project] = append(sessionsBy[s.Project], sessionsJSON([]store.SessionRow{s})[0])
-	}
 	modelsBy := map[string][]map[string]any{}
 	for _, m := range projectModels {
 		modelsBy[m.Project] = append(modelsBy[m.Project], map[string]any{
@@ -196,17 +195,6 @@ func projectsJSON(
 	out := make([]map[string]any, 0, len(projects))
 	index := map[string]int{}
 	for _, p := range projects {
-		llm := 0.0
-		tool := 0.0
-		tokens := int64(0)
-		for _, s := range sessions {
-			if s.Project != p.Project {
-				continue
-			}
-			llm += s.LLMSeconds
-			tool += s.ToolSeconds
-			tokens += s.TotalTokens
-		}
 		row := map[string]any{
 			"name":                  p.Project,
 			"agent_cmd":             p.Agent,
@@ -214,24 +202,23 @@ func projectsJSON(
 			"cost":                  p.Cost,
 			"sessions":              p.Sessions,
 			"messages":              p.Calls,
-			"tokens":                tokens,
+			"tokens":                p.TotalTokens,
 			"avg_tps":               projectThroughput(projectModels, p.Project),
-			"llm_time":              llm,
-			"tool_time":             tool,
-			"llm_time_display":      humanDuration(llm),
-			"tool_time_display":     humanDuration(tool),
+			"llm_time":              p.LLMSeconds,
+			"tool_time":             p.ToolSeconds,
+			"llm_time_display":      humanDuration(p.LLMSeconds),
+			"tool_time_display":     humanDuration(p.ToolSeconds),
 			"last_activity":         p.LastTS,
 			"last_activity_display": displayTime(p.LastTS),
-			"sessions_list":         orEmpty(sessionsBy[p.Project]),
+			"per_session":           ratio(p.Cost, float64(p.Sessions)),
+			"per_call":              ratio(p.Cost, float64(p.Calls)),
 			"models":                orEmpty(modelsBy[p.Project]),
 			"tools":                 orEmpty(toolsBy[p.Project]),
 		}
 		if i, ok := index[p.Project]; ok {
 			// A second agent in the same directory folds into the row already
-			// emitted. The session-derived figures are keyed on the project
-			// alone and so are already counted once; only the per-agent sums
-			// are added.
-			mergeProjectRow(out[i], p, llm, tool)
+			// emitted.
+			mergeProjectRow(out[i], p)
 			continue
 		}
 		index[p.Project] = len(out)
@@ -242,12 +229,15 @@ func projectsJSON(
 
 // mergeProjectRow folds another agent's row for the same project into the row
 // the page already has.
-func mergeProjectRow(row map[string]any, p store.ProjectStat, llm, tool float64) {
+func mergeProjectRow(row map[string]any, p store.ProjectStat) {
 	row["cost"] = row["cost"].(float64) + p.Cost
 	row["sessions"] = row["sessions"].(int) + p.Sessions
 	row["messages"] = row["messages"].(int) + p.Calls
-	row["llm_time"] = row["llm_time"].(float64) + llm
-	row["tool_time"] = row["tool_time"].(float64) + tool
+	row["tokens"] = row["tokens"].(int64) + p.TotalTokens
+	row["llm_time"] = row["llm_time"].(float64) + p.LLMSeconds
+	row["tool_time"] = row["tool_time"].(float64) + p.ToolSeconds
+	row["per_session"] = ratio(row["cost"].(float64), float64(row["sessions"].(int)))
+	row["per_call"] = ratio(row["cost"].(float64), float64(row["messages"].(int)))
 	row["llm_time_display"] = humanDuration(row["llm_time"].(float64))
 	row["tool_time_display"] = humanDuration(row["tool_time"].(float64))
 	if p.LastTS > row["last_activity"].(int64) {
@@ -319,6 +309,7 @@ func sessionsJSON(sessions []store.SessionRow) []map[string]any {
 	for _, s := range sessions {
 		out = append(out, map[string]any{
 			"uid":                s.UID,
+			"resume_uid":         resumeUID(s.UID, s.Machine),
 			"agent_cmd":          s.Agent,
 			"cwd":                s.Project,
 			"machine":            s.Machine,
@@ -371,21 +362,23 @@ func ratio(a, b float64) float64 {
 
 func sessionView(s store.SessionRow) map[string]any {
 	return map[string]any{
-		"UID":      s.UID,
-		"Agent":    s.Agent,
-		"Project":  s.Project,
-		"Machine":  s.Machine,
-		"Path":     s.Path,
-		"Title":    s.Title,
-		"Calls":    s.Calls,
-		"Tokens":   s.TotalTokens,
-		"Cost":     fmt.Sprintf("$%.2f", s.Cost),
-		"LLMTime":  humanDuration(s.LLMSeconds),
-		"ToolTime": humanDuration(s.ToolSeconds),
-		"Wall":     humanDuration(s.WallSeconds),
-		"Orphaned": s.Orphaned,
-		"First":    formatUnix(s.FirstTS),
-		"Last":     formatUnix(s.LastTS),
+		"UID":        s.UID,
+		"Agent":      s.Agent,
+		"Project":    s.Project,
+		"Machine":    s.Machine,
+		"Path":       s.Path,
+		"Title":      s.Title,
+		"Calls":      s.Calls,
+		"Tokens":     s.TotalTokens,
+		"Cost":       fmt.Sprintf("$%.2f", s.Cost),
+		"LLMTime":    humanDuration(s.LLMSeconds),
+		"ToolTime":   humanDuration(s.ToolSeconds),
+		"Wall":       humanDuration(s.WallSeconds),
+		"Orphaned":   s.Orphaned,
+		"First":      formatUnix(s.FirstTS),
+		"Last":       formatUnix(s.LastTS),
+		"ToolCalls":  s.ToolCalls,
+		"ToolErrors": s.ToolErrors,
 	}
 }
 
@@ -404,6 +397,7 @@ func callViews(calls []store.CallRow) []map[string]any {
 			"LLMTime":    humanDuration(c.LLMSeconds),
 			"Cost":       fmt.Sprintf("$%.4f", c.Cost),
 			"Priced":     c.Priced,
+			"Ingested":   ingestLag(c.TS, c.IngestedAt),
 		})
 	}
 	return out
@@ -614,7 +608,22 @@ func machinesJSON(machines []store.MachineStat, totalCost float64) []map[string]
 			"pct":                pct,
 			"last_activity":      m.LastTS,
 			"last_display":       displayTime(m.LastTS),
+			"per_session":        ratio(m.Cost, float64(m.Sessions)),
+			"per_call":           ratio(m.Cost, float64(m.Calls)),
 		})
 	}
 	return out
+}
+
+// ingestLag says how long after a call happened the store received it, which
+// is how a laptop that was offline for a day shows up on a central server.
+func ingestLag(ts, ingestedAt int64) string {
+	if ts <= 0 || ingestedAt <= 0 {
+		return ""
+	}
+	lag := ingestedAt - ts
+	if lag < 120 {
+		return "live"
+	}
+	return "+" + humanDuration(float64(lag))
 }

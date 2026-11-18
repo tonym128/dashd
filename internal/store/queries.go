@@ -506,6 +506,11 @@ type ProjectStat struct {
 	Sessions int
 	FirstTS  int64
 	LastTS   int64
+	// Summed from the session rows, so the page no longer needs every session
+	// to compute a project's time and token figures.
+	LLMSeconds  float64
+	ToolSeconds float64
+	TotalTokens int64
 }
 
 // Projects returns per-project totals.
@@ -514,7 +519,8 @@ func (s *Store) Projects(ctx context.Context, f Filter) ([]ProjectStat, error) {
 	rows, err := s.q.QueryContext(ctx, `
 		SELECT s.project, s.agent,
 		       COALESCE(SUM(s.cost_usd),0), COALESCE(SUM(s.calls),0),
-		       COUNT(*), COALESCE(MIN(NULLIF(s.first_ts,0)),0), COALESCE(MAX(s.last_ts),0)
+		       COUNT(*), COALESCE(MIN(NULLIF(s.first_ts,0)),0), COALESCE(MAX(s.last_ts),0),
+		       COALESCE(SUM(s.llm_seconds),0), COALESCE(SUM(s.tool_seconds),0), COALESCE(SUM(s.total_tokens),0)
 		FROM session s`+where+`
 		GROUP BY s.project, s.agent
 		ORDER BY MAX(s.last_ts) DESC`, args...)
@@ -526,7 +532,7 @@ func (s *Store) Projects(ctx context.Context, f Filter) ([]ProjectStat, error) {
 	for rows.Next() {
 		var p ProjectStat
 		if err := rows.Scan(&p.Project, &p.Agent, &p.Cost, &p.Calls, &p.Sessions,
-			&p.FirstTS, &p.LastTS); err != nil {
+			&p.FirstTS, &p.LastTS, &p.LLMSeconds, &p.ToolSeconds, &p.TotalTokens); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -975,6 +981,7 @@ type CallRow struct {
 	LLMSeconds       float64
 	Cost             float64
 	Priced           bool
+	IngestedAt       int64
 }
 
 // SessionCalls returns a session's calls in time order.
@@ -986,7 +993,7 @@ func (s *Store) SessionCalls(ctx context.Context, uid string) ([]CallRow, error)
 	rows, err := s.q.QueryContext(ctx, `
 		SELECT ts, model, input_tokens, output_tokens, cache_read_tokens,
 		       cache_write_tokens, reasoning_tokens, total_tokens, llm_seconds,
-		       cost_usd, priced
+		       cost_usd, priced, ingested_at
 		FROM call WHERE session_uid = ? ORDER BY ts, call_key`, uid)
 	if err != nil {
 		return nil, fmt.Errorf("session calls %s: %w", uid, err)
@@ -998,7 +1005,7 @@ func (s *Store) SessionCalls(ctx context.Context, uid string) ([]CallRow, error)
 		var priced int
 		if err := rows.Scan(&c.TS, &c.Model, &c.InputTokens, &c.OutputTokens,
 			&c.CacheReadTokens, &c.CacheWriteTokens, &c.ReasoningTokens,
-			&c.TotalTokens, &c.LLMSeconds, &c.Cost, &priced); err != nil {
+			&c.TotalTokens, &c.LLMSeconds, &c.Cost, &priced, &c.IngestedAt); err != nil {
 			return nil, err
 		}
 		c.Priced = priced != 0

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tonym128/dashd/internal/model"
+	"github.com/tonym128/dashd/internal/web"
 )
 
 func TestCheckExposure(t *testing.T) {
@@ -157,7 +158,7 @@ func TestLoadMachineTokensAndSecrets(t *testing.T) {
 }
 
 func TestCSVSafe(t *testing.T) {
-	if csvSafe("=HYPERLINK(1)") != "'=HYPERLINK(1)" || csvSafe("/p") != "/p" {
+	if web.CSVSafe("=HYPERLINK(1)") != "'=HYPERLINK(1)" || web.CSVSafe("/p") != "/p" {
 		t.Fatal("csvSafe")
 	}
 }

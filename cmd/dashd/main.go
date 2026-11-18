@@ -303,6 +303,8 @@ func run(o options, command string, stdout io.Writer) error {
 	srv.IngestEnabled = ingestEnabled(o, command)
 	srv.RepriceFunc = func(rctx context.Context) (int, error) { return st.Reprice(rctx, priceFn) }
 	srv.ScanInfo = scanner.Status
+	srv.ScanDuration = scanner.LastDuration
+	srv.AuthEnabled = o.authToken != ""
 	if command == "serve" {
 		// No local scanner: report the last ingest instead.
 		srv.ScanInfo = nil

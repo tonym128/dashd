@@ -401,6 +401,12 @@ func RunNotifier(ctx context.Context, st *store.Store, cfg NotifierConfig) {
 
 // NotifyOnce runs one notifier check.
 func NotifyOnce(ctx context.Context, st *store.Store, cfg NotifierConfig) error {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.Log == nil {
+		cfg.Log = slog.Default()
+	}
 	now := cfg.Now()
 	daily, err := st.Daily(ctx, store.Filter{})
 	if err != nil {
@@ -495,4 +501,94 @@ func PostWebhook(ctx context.Context, client *http.Client, url, text string) err
 		return fmt.Errorf("webhook: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------- comparison
+
+// comparisonWindow picks the period the page is about and the equal-length
+// period before it: the filter's date range when there is one, otherwise the
+// last seven days.
+func comparisonWindow(f store.Filter, now time.Time) (curFrom, curTo, priorFrom, priorTo time.Time, label string) {
+	curTo = localDay(now).AddDate(0, 0, 1).Add(-time.Second)
+	curFrom = localDay(now).AddDate(0, 0, -6)
+	label = "Last 7 days"
+	if f.DateFrom != nil {
+		curFrom = *f.DateFrom
+		label = "Selected range"
+	}
+	if f.DateTo != nil {
+		curTo = *f.DateTo
+		label = "Selected range"
+	}
+	span := curTo.Sub(curFrom) + time.Second
+	priorTo = curFrom.Add(-time.Second)
+	priorFrom = curFrom.Add(-span)
+	return
+}
+
+// comparisonJSON computes the period comparison shown on the Overview.
+func comparisonJSON(ctx context.Context, st *store.Store, f store.Filter, now time.Time) (map[string]any, error) {
+	cf, ct, pf, pt, label := comparisonWindow(f, now)
+	cur, prior := f, f
+	cur.DateFrom, cur.DateTo = &cf, &ct
+	prior.DateFrom, prior.DateTo = &pf, &pt
+	ctot, err := st.Totals(ctx, cur)
+	if err != nil {
+		return nil, err
+	}
+	ptot, err := st.Totals(ctx, prior)
+	if err != nil {
+		return nil, err
+	}
+	cm, err := st.Models(ctx, cur)
+	if err != nil {
+		return nil, err
+	}
+	pm, err := st.Models(ctx, prior)
+	if err != nil {
+		return nil, err
+	}
+	type pair struct{ cur, prior float64 }
+	byModel := map[string]*pair{}
+	for _, m := range cm {
+		byModel[m.Model] = &pair{cur: m.Cost}
+	}
+	for _, m := range pm {
+		if p, ok := byModel[m.Model]; ok {
+			p.prior = m.Cost
+		} else {
+			byModel[m.Model] = &pair{prior: m.Cost}
+		}
+	}
+	models := make([]map[string]any, 0, len(byModel))
+	for name, p := range byModel {
+		models = append(models, map[string]any{"name": name, "current": p.cur, "prior": p.prior, "delta": p.cur - p.prior})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		a, b := models[i]["delta"].(float64), models[j]["delta"].(float64)
+		if a < 0 {
+			a = -a
+		}
+		if b < 0 {
+			b = -b
+		}
+		return a > b
+	})
+	if len(models) > 8 {
+		models = models[:8]
+	}
+	side := func(t store.Totals) map[string]any {
+		return map[string]any{"cost": t.Cost, "calls": t.Calls, "sessions": t.Sessions, "tokens": t.TotalTokens,
+			"per_call": ratio(t.Cost, float64(t.Calls))}
+	}
+	return map[string]any{
+		"label":       label,
+		"currentFrom": cf.Format("2006-01-02"),
+		"currentTo":   ct.Format("2006-01-02"),
+		"priorFrom":   pf.Format("2006-01-02"),
+		"priorTo":     pt.Format("2006-01-02"),
+		"current":     side(ctot),
+		"prior":       side(ptot),
+		"models":      models,
+	}, nil
 }
