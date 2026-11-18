@@ -81,6 +81,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/reprice", s.handleReprice)
+	mux.HandleFunc("/api/sessions", s.handleSessionsAPI)
+	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.Handle("/session", http.HandlerFunc(s.handleSession))
 	// Outermost, so the headers are on every response the dashboard produces —
 	// including the assets, which is where a policy that only covered documents

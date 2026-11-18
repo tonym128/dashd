@@ -109,6 +109,11 @@ func run(o options, command string, stdout io.Writer) error {
 		defer stop()
 		return runDoctor(ctx, o, stdout)
 	}
+	if command == "self-update" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return runSelfUpdate(ctx, stdout)
+	}
 
 	// The store reports a database it could not chmod 0600 through this hook,
 	// rather than failing: a filesystem without permission bits should not stop

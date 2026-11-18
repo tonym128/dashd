@@ -169,10 +169,10 @@
     </div>
     <div class="insights-grid">
       {{range .TopInsights}}
-      <div class="insight-card insight-{{.Severity}}">
+      <div class="insight-card insight-{{.Severity}}" data-insight-id="{{.ID}}">
         <div class="insight-meta">
           <span class="insight-category">{{.Category}}</span>
-          <span class="insight-sev">{{.Severity}}</span>
+          <span class="insight-sev">{{.Severity}}{{if ne .Severity "warn"}} <button type="button" class="insight-dismiss" data-dismiss-insight="{{.ID}}" aria-label="Dismiss insight" title="Dismiss">&times;</button>{{end}}</span>
         </div>
         <div class="insight-headline">{{.Headline}}</div>
         <p class="insight-detail">{{.Detail}}</p>
@@ -191,10 +191,10 @@
     {{if .Insights}}
     <div class="insights-grid">
       {{range .Insights}}
-      <div class="insight-card insight-{{.Severity}}">
+      <div class="insight-card insight-{{.Severity}}" data-insight-id="{{.ID}}">
         <div class="insight-meta">
           <span class="insight-category">{{.Category}}</span>
-          <span class="insight-sev">{{.Severity}}</span>
+          <span class="insight-sev">{{.Severity}}{{if ne .Severity "warn"}} <button type="button" class="insight-dismiss" data-dismiss-insight="{{.ID}}" aria-label="Dismiss insight" title="Dismiss">&times;</button>{{end}}</span>
         </div>
         <div class="insight-headline">{{.Headline}}</div>
         <p class="insight-detail">{{.Detail}}</p>

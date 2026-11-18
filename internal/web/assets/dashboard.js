@@ -1828,4 +1828,94 @@ updateSortIcons('tools-table', toolSort);
                 });
         });
     }
+
+    // Dismissible info/tip insight cards (persisted in localStorage)
+    let dismissedInsights = [];
+    try {
+        dismissedInsights = JSON.parse(localStorage.getItem('dashd:dismissed-insights') || '[]') || [];
+    } catch (_) {}
+    if (document.querySelectorAll) {
+        document.querySelectorAll('[data-insight-id]').forEach(card => {
+            if (dismissedInsights.indexOf(card.dataset.insightId) !== -1) {
+                card.classList.add('is-hidden');
+            }
+        });
+    }
+    if (document.addEventListener) {
+        document.addEventListener('click', event => {
+            const btn = event.target.closest('[data-dismiss-insight]');
+            if (!btn) return;
+            const id = btn.dataset.dismissInsight;
+            if (id && dismissedInsights.indexOf(id) === -1) {
+                dismissedInsights.push(id);
+                try { localStorage.setItem('dashd:dismissed-insights', JSON.stringify(dismissedInsights)); } catch (_) {}
+            }
+            if (document.querySelectorAll) {
+                document.querySelectorAll('[data-insight-id]').forEach(card => {
+                    if (card.dataset.insightId === id) card.classList.add('is-hidden');
+                });
+            }
+        });
+    }
+
+    // Enhance multi-select filter <select> elements with searchable checkbox popovers
+    if (typeof document.createElement === 'function') {
+        ['model', 'agent', 'project', 'machine'].forEach(id => {
+            const sel = document.getElementById(id);
+            if (!sel || !sel.options || !sel.parentNode || !sel.parentNode.insertBefore) return;
+            const opts = Array.from(sel.options);
+            if (!opts.length) return;
+
+            sel.classList.add('sr-only-select');
+            const details = document.createElement('details');
+            details.className = 'multi-picker';
+
+            const summary = document.createElement('summary');
+            const updateSummary = () => {
+                const count = opts.filter(o => o.selected).length;
+                summary.textContent = count > 0 ? count + ' selected' : 'Any (' + opts.length + ')';
+            };
+            updateSummary();
+            details.appendChild(summary);
+
+            const menu = document.createElement('div');
+            menu.className = 'multi-picker-menu';
+            const search = document.createElement('input');
+            search.type = 'search';
+            search.className = 'multi-picker-search';
+            search.placeholder = 'Search...';
+            menu.appendChild(search);
+
+            const list = document.createElement('div');
+            list.className = 'multi-picker-list';
+            const rows = opts.map(opt => {
+                const label = document.createElement('label');
+                label.className = 'multi-picker-item';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = !!opt.selected;
+                cb.addEventListener('change', () => {
+                    opt.selected = cb.checked;
+                    updateSummary();
+                });
+                const span = document.createElement('span');
+                span.textContent = opt.textContent || opt.value;
+                label.appendChild(cb);
+                label.appendChild(span);
+                list.appendChild(label);
+                return { label, text: String(opt.value || '').toLowerCase() };
+            });
+
+            search.addEventListener('input', () => {
+                const q = search.value.trim().toLowerCase();
+                rows.forEach(r => {
+                    r.label.style.display = (!q || r.text.includes(q)) ? '' : 'none';
+                });
+            });
+
+            menu.appendChild(list);
+            details.appendChild(menu);
+            sel.parentNode.insertBefore(details, sel.nextSibling);
+        });
+    }
 })();

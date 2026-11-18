@@ -1,8 +1,12 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -126,4 +130,92 @@ func TestRemoteSinkPushesToIngestEndpoint(t *testing.T) {
 	cancel()
 	sc := scan.New(scan.Config{Store: st, Pricer: pricer})
 	runPushLoop(cctx, sc, syncSink, time.Second, nil)
+}
+
+func TestSelfUpdateFromTarGz(t *testing.T) {
+	var arcBuf bytes.Buffer
+	gz := gzip.NewWriter(&arcBuf)
+	tw := tar.NewWriter(gz)
+	payload := []byte("#!/bin/sh\necho updated\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "dashd_0.9.0_linux_amd64/dashd", Mode: 0o755, Size: int64(len(payload)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest":
+			_, _ = w.Write([]byte(`{"tag_name":"v0.9.0"}`))
+		case "/dl/v0.9.0/dashd_0.9.0_linux_amd64.tar.gz":
+			_, _ = w.Write(arcBuf.Bytes())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	exe := filepath.Join(t.TempDir(), "dashd")
+	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := selfUpdateFrom(context.Background(), srv.URL+"/latest", srv.URL+"/dl", "0.8.0", "linux", "amd64", exe, &out); err != nil {
+		t.Fatalf("selfUpdateFrom: %v", err)
+	}
+	got, err := os.ReadFile(exe)
+	if err != nil || string(got) != string(payload) {
+		t.Fatalf("updated binary = %q, err=%v", string(got), err)
+	}
+
+	// Already up-to-date short-circuits.
+	var upOut bytes.Buffer
+	if err := selfUpdateFrom(context.Background(), srv.URL+"/latest", srv.URL+"/dl", "0.9.0", "linux", "amd64", exe, &upOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(upOut.String(), "already up to date") {
+		t.Fatalf("unexpected up-to-date output: %s", upOut.String())
+	}
+}
+
+func TestSelfUpdateFromZip(t *testing.T) {
+	var zipBuf bytes.Buffer
+	zw := zip.NewWriter(&zipBuf)
+	w, err := zw.Create("dashd_0.9.0_windows_amd64/dashd.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("MZ-updated")
+	if _, err := w.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	_ = zw.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest":
+			_, _ = w.Write([]byte(`{"tag_name":"v0.9.0"}`))
+		case "/dl/v0.9.0/dashd_0.9.0_windows_amd64.zip":
+			_, _ = w.Write(zipBuf.Bytes())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	exe := filepath.Join(t.TempDir(), "dashd.exe")
+	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := selfUpdateFrom(context.Background(), srv.URL+"/latest", srv.URL+"/dl", "0.8.0", "windows", "amd64", exe, &out); err != nil {
+		t.Fatalf("selfUpdateFrom zip: %v", err)
+	}
+	got, err := os.ReadFile(exe)
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("updated zip binary = %q, err=%v", string(got), err)
+	}
 }

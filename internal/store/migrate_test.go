@@ -125,12 +125,22 @@ func openV0(t *testing.T, path string) {
 			t.Fatalf("seed: add %s.machine: %v", tbl, err)
 		}
 	}
+	for _, tbl := range []string{"session", "call"} {
+		if _, err := db.Exec("ALTER TABLE " + tbl + " ADD COLUMN ingested_at INTEGER NOT NULL DEFAULT 0"); err != nil {
+			t.Fatalf("seed: add %s.ingested_at: %v", tbl, err)
+		}
+	}
 	for _, sess := range fixture(t, at) {
 		if err := st.ReplaceSession(sess); err != nil {
 			t.Fatalf("seed %s: %v", sess.UID, err)
 		}
 		if err := st.RecomputeSession(sess.UID); err != nil {
 			t.Fatalf("seed summaries %s: %v", sess.UID, err)
+		}
+	}
+	for _, tbl := range []string{"session", "call"} {
+		if _, err := db.Exec("ALTER TABLE " + tbl + " DROP COLUMN ingested_at"); err != nil {
+			t.Fatalf("seed: drop %s.ingested_at: %v", tbl, err)
 		}
 	}
 	for _, tbl := range []string{"session", "call", "tool_call"} {

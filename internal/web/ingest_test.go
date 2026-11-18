@@ -184,4 +184,22 @@ func TestSplitAuthAndModelsSync(t *testing.T) {
 	if uRec.Code != http.StatusOK {
 		t.Fatalf("GET /?unpriced=1 = %d", uRec.Code)
 	}
+
+	// GET /metrics returns Prometheus text format.
+	metReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metReq.Header.Set("Authorization", "Bearer ui-secret")
+	metRec := httptest.NewRecorder()
+	handler.ServeHTTP(metRec, metReq)
+	if metRec.Code != http.StatusOK || !strings.Contains(metRec.Body.String(), "dashd_calls_total") {
+		t.Fatalf("GET /metrics = %d %s", metRec.Code, metRec.Body.String())
+	}
+
+	// GET /api/sessions returns paginated JSON.
+	sessReq := httptest.NewRequest(http.MethodGet, "/api/sessions?limit=10&offset=0", nil)
+	sessReq.Header.Set("Authorization", "Bearer ui-secret")
+	sessRec := httptest.NewRecorder()
+	handler.ServeHTTP(sessRec, sessReq)
+	if sessRec.Code != http.StatusOK || !strings.Contains(sessRec.Body.String(), `"sessions"`) {
+		t.Fatalf("GET /api/sessions = %d %s", sessRec.Code, sessRec.Body.String())
+	}
 }

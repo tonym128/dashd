@@ -408,6 +408,7 @@ var migrations = []migration{
 	v5CacheWrite1h,
 	v6Machine,
 	v7MachineStatus,
+	v8IngestedAt,
 }
 
 // execScript turns a multi-statement script into a migration step.
@@ -583,8 +584,8 @@ func (s *Store) ReplaceSession(sess model.SessionWrite) error {
 		// an UPDATE against a row that was never inserted silently does
 		// nothing, and the session then vanishes from every table.
 		_, err := tx.Exec(`
-			INSERT INTO session (uid, agent, project, machine, path, title) VALUES (?,?,?,?,?,?)`,
-			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path, sess.Title)
+			INSERT INTO session (uid, agent, project, machine, path, title, ingested_at) VALUES (?,?,?,?,?,?,?)`,
+			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path, sess.Title, time.Now().Unix())
 		return err
 	})
 }
@@ -630,13 +631,14 @@ func (s *Store) AppendSession(sess model.SessionWrite) error {
 		// this pass actually knows one, so an append that learned nothing about
 		// it cannot erase it.
 		_, err := tx.Exec(
-			`INSERT INTO session (uid, agent, project, machine, path) VALUES (?,?,?,?,?)
+			`INSERT INTO session (uid, agent, project, machine, path, ingested_at) VALUES (?,?,?,?,?,?)
 			 ON CONFLICT(uid) DO UPDATE SET
 				project = CASE WHEN excluded.project = '' THEN session.project
 				               ELSE excluded.project END,
 				machine = CASE WHEN excluded.machine = '' THEN session.machine
-				               ELSE excluded.machine END`,
-			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path)
+				               ELSE excluded.machine END,
+				ingested_at = excluded.ingested_at`,
+			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path, time.Now().Unix())
 		return err
 	})
 }
@@ -670,12 +672,13 @@ func rowProject(sessionProject, rowProject string) string {
 }
 
 func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
+	nowUnix := time.Now().Unix()
 	callStmt, err := tx.Prepare(`
 		INSERT INTO call (session_uid, call_key, agent, project, machine, model, ts, day,
 		                  input_tokens, output_tokens, cache_read_tokens,
 		                  cache_write_tokens, cache_write_1h_tokens, reasoning_tokens,
-		                  total_tokens, llm_seconds, cost_usd, priced)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		                  total_tokens, llm_seconds, cost_usd, priced, ingested_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(session_uid, call_key) DO UPDATE SET
 			machine = CASE WHEN excluded.machine = '' THEN call.machine ELSE excluded.machine END,
 			model = excluded.model, ts = excluded.ts, day = excluded.day,
@@ -685,7 +688,8 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 			cache_write_1h_tokens = excluded.cache_write_1h_tokens,
 			reasoning_tokens = excluded.reasoning_tokens,
 			total_tokens = excluded.total_tokens, llm_seconds = excluded.llm_seconds,
-			cost_usd = excluded.cost_usd, priced = excluded.priced`)
+			cost_usd = excluded.cost_usd, priced = excluded.priced,
+			ingested_at = excluded.ingested_at`)
 	if err != nil {
 		return err
 	}
@@ -703,7 +707,7 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 		if _, err := callStmt.Exec(
 			c.SessionUID, c.CallKey, c.Agent, rowProject(sess.Project, c.Project), rowProject(sess.Machine, c.Machine), c.Model, ts, day,
 			c.InputTokens, c.OutputTokens, c.CacheReadTokens, c.CacheWriteTokens,
-			c.CacheWrite1hTokens, c.ReasoningTokens, c.TotalTokens, c.LLMSeconds, c.CostUSD, boolInt(c.Priced),
+			c.CacheWrite1hTokens, c.ReasoningTokens, c.TotalTokens, c.LLMSeconds, c.CostUSD, boolInt(c.Priced), nowUnix,
 		); err != nil {
 			return fmt.Errorf("insert call %s/%s: %w", c.SessionUID, c.CallKey, err)
 		}

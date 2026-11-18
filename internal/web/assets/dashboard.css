@@ -1681,3 +1681,102 @@ body.compact-tables #machines-table td:nth-child(n+5):nth-child(-n+7) {
 .insight-action:hover {
     text-decoration: underline;
 }
+
+.insight-dismiss {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    margin-left: 6px;
+    padding: 0 3px;
+}
+
+.insight-dismiss:hover {
+    color: var(--text-primary);
+}
+
+/* ── Searchable Multi-Select Filter Popovers ─────────────────────────── */
+.sr-only-select {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+.multi-picker {
+    position: relative;
+}
+
+.multi-picker summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 7px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    min-height: 36px;
+}
+
+.multi-picker summary::-webkit-details-marker {
+    display: none;
+}
+
+.multi-picker-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 30;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    min-width: 220px;
+}
+
+.multi-picker-search {
+    width: 100%;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.multi-picker-list {
+    max-height: 200px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.multi-picker-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+}
+
+.multi-picker-item:hover {
+    background: var(--bg-tertiary);
+}
