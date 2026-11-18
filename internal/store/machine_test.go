@@ -110,4 +110,28 @@ func TestMachinePersistenceAndFiltering(t *testing.T) {
 	if len(sessions) != 1 || sessions[0].Machine != "workstation" {
 		t.Fatalf("Sessions(workstation) = %+v, want 1 session with machine=workstation", sessions)
 	}
+
+	if err := st.RecordMachineHeartbeat("macbook", 1, 2, ts); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := st.MachineStatuses(ctx)
+	if err != nil || len(statuses) != 1 || statuses[0].Machine != "macbook" {
+		t.Fatalf("MachineStatuses = %+v, err=%v", statuses, err)
+	}
+	bd, err := st.MachinesBreakdown(ctx, Filter{})
+	if err != nil || len(bd) != 2 {
+		t.Fatalf("MachinesBreakdown = %+v, err=%v", bd, err)
+	}
+	totAll, err := st.Totals(ctx, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := st.InsightSignals(ctx, Filter{}, totAll)
+	if err != nil || sig.MachineCount != 2 {
+		t.Fatalf("InsightSignals = %+v, err=%v", sig, err)
+	}
+	unpriced, err := st.UnpricedModels(ctx)
+	if err != nil || len(unpriced) != 0 {
+		t.Fatalf("UnpricedModels = %+v, err=%v", unpriced, err)
+	}
 }

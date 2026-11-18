@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/tonym128/dashd/internal/model"
+	"github.com/tonym128/dashd/internal/scan"
+	"github.com/tonym128/dashd/internal/source"
 	"github.com/tonym128/dashd/internal/store"
 	"github.com/tonym128/dashd/internal/web"
 )
@@ -71,4 +76,54 @@ func TestRemoteSinkPushesToIngestEndpoint(t *testing.T) {
 	if err := badSink.RecomputeSession(sess.UID); err == nil {
 		t.Fatal("expected error with wrong auth token, got nil")
 	}
+
+	// SyncModels + AppendSession + SendHeartbeat + runDoctor.
+	dir := t.TempDir()
+	srvModels := filepath.Join(dir, "srv-models.json")
+	if err := os.WriteFile(srvModels, []byte(`{"data":[{"id":"google/gemini-4-hydrogen","pricing":{"prompt":"0.0000015","completion":"0.0000075"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv.ModelsPath = srvModels
+
+	cliModels := filepath.Join(dir, "cli-models.json")
+	pricer, err := source.NewFallbackPricer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncSink := newRemoteSink(ts.URL, "push-secret", "devbox").withModelsSync(cliModels, pricer, nil)
+	syncSink.SyncModels()
+	if _, ok := pricer.Resolve("google/gemini-4-hydrogen"); !ok {
+		t.Fatal("expected SyncModels to reload pricer with server model")
+	}
+
+	if err := syncSink.AppendSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncSink.RecomputeSession(sess.UID); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncSink.SendHeartbeat(); err != nil {
+		t.Fatal(err)
+	}
+
+	var docOut bytes.Buffer
+	if err := runDoctor(ctx, options{
+		db:        filepath.Join(dir, "doc.db"),
+		home:      dir,
+		models:    cliModels,
+		machine:   "devbox",
+		remote:    ts.URL,
+		authToken: "push-secret",
+	}, &docOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(docOut.String(), "dashd doctor") || !strings.Contains(docOut.String(), "200") {
+		t.Fatalf("unexpected doctor output: %s", docOut.String())
+	}
+
+	// runPushLoop exits cleanly when context is canceled.
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	sc := scan.New(scan.Config{Store: st, Pricer: pricer})
+	runPushLoop(cctx, sc, syncSink, time.Second, nil)
 }

@@ -157,4 +157,31 @@ func TestSplitAuthAndModelsSync(t *testing.T) {
 	if mRec304.Code != http.StatusNotModified {
 		t.Fatalf("GET /api/models with If-None-Match = %d, want 304", mRec304.Code)
 	}
+
+	// POST /api/reprice requires UI auth and calls RepriceFunc.
+	srv.RepriceFunc = func(context.Context) (int, error) { return 42, nil }
+	repUnauth := httptest.NewRequest(http.MethodPost, "/api/reprice", nil)
+	repUnauth.Header.Set("Authorization", "Bearer ingest-secret")
+	repUnauthRec := httptest.NewRecorder()
+	handler.ServeHTTP(repUnauthRec, repUnauth)
+	if repUnauthRec.Code != http.StatusUnauthorized {
+		t.Fatalf("ingest token on /api/reprice = %d, want 401", repUnauthRec.Code)
+	}
+
+	repReq := httptest.NewRequest(http.MethodPost, "/api/reprice", nil)
+	repReq.Header.Set("Authorization", "Bearer ui-secret")
+	repRec := httptest.NewRecorder()
+	handler.ServeHTTP(repRec, repReq)
+	if repRec.Code != http.StatusOK || !strings.Contains(repRec.Body.String(), `"repriced":42`) {
+		t.Fatalf("POST /api/reprice = %d %s", repRec.Code, repRec.Body.String())
+	}
+
+	// ?unpriced=1 filter renders cleanly.
+	uReq := httptest.NewRequest(http.MethodGet, "/?unpriced=1", nil)
+	uReq.Header.Set("Authorization", "Bearer ui-secret")
+	uRec := httptest.NewRecorder()
+	handler.ServeHTTP(uRec, uReq)
+	if uRec.Code != http.StatusOK {
+		t.Fatalf("GET /?unpriced=1 = %d", uRec.Code)
+	}
 }

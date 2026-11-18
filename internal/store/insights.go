@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
 )
 
 // InsightSignals holds the pre-aggregated signals used to generate human-readable
@@ -186,6 +185,3 @@ func (s *Store) InsightSignals(ctx context.Context, f Filter, totals Totals) (In
 
 	return sig, nil
 }
-
-// QueryEscape escapes a filter value for dashboard URLs.
-func QueryEscape(v string) string { return url.QueryEscape(v) }
