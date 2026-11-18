@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -139,7 +140,8 @@ func TestBackupAndRename(t *testing.T) {
 	if tot.Calls != 1 {
 		t.Fatalf("backup has %d calls", tot.Calls)
 	}
-	if fi, _ := os.Stat(dest); fi.Mode().Perm() != 0o600 {
+	// Unix permission bits only; Windows reports 0666 for any writable file.
+	if fi, _ := os.Stat(dest); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("backup mode %o, want 600", fi.Mode().Perm())
 	}
 	if _, err := st.RenameMachine("", "x"); err == nil {
