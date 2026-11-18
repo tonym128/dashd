@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Planned as 0.9.0. The database migrates to schema version 10 on first start
+## [0.9.0] - 2026-11-18
+
+The database migrates to schema version 10 on first start
 (a copy is written to `dashboard.db.bak-v<old>` first); older binaries refuse
 the migrated database.
 
