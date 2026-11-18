@@ -24,8 +24,8 @@ func TestEveryResponseCarriesSecurityHeaders(t *testing.T) {
 			if got := h.Get("X-Frame-Options"); got != "DENY" {
 				t.Errorf("X-Frame-Options = %q, want DENY", got)
 			}
-			if got := h.Get("Referrer-Policy"); got != "no-referrer" {
-				t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+			if got := h.Get("Referrer-Policy"); got != "same-origin" {
+				t.Errorf("Referrer-Policy = %q, want same-origin", got)
 			}
 			if h.Get("Content-Security-Policy") == "" {
 				t.Error("no Content-Security-Policy")

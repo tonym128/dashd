@@ -63,9 +63,11 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		nonce := newNonce()
 		h := w.Header()
 		h.Set("Content-Security-Policy", cspFor(nonce))
-		// Nothing off-origin is loaded, so there is no referrer worth sending
-		// and no reason to let another page frame or sniff this one.
-		h.Set("Referrer-Policy", "no-referrer")
+		// No referrer leaves for another site, and no other page may frame or
+		// sniff this one. same-origin rather than no-referrer: under
+		// no-referrer browsers send "Origin: null" on the page's own form
+		// POSTs (sign in, sign out), which the cross-site check then refuses.
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(),

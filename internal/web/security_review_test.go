@@ -334,3 +334,35 @@ func TestThrottledLog(t *testing.T) {
 }
 
 var _ = store.Filter{}
+
+// A browser submitting the login form from a page with a no-referrer policy
+// sends "Origin: null" with Sec-Fetch-Site: same-origin; behind a proxy the
+// Host may differ from the Origin. Both are same-origin and must be allowed.
+func TestLoginFormFromABrowserIsNotRefused(t *testing.T) {
+	srv, _ := newTestServer(t)
+	h := WithAuthConfig(AuthConfig{UIToken: testToken, Log: discardLog()}, srv.Handler())
+	cases := []struct {
+		name string
+		hdr  map[string]string
+		want int
+	}{
+		{"origin null, same-origin fetch metadata", map[string]string{"Origin": "null", "Sec-Fetch-Site": "same-origin"}, http.StatusSeeOther},
+		{"proxy rewrote Host, fetch metadata", map[string]string{"Origin": "https://dash.ts.net", "Sec-Fetch-Site": "same-origin"}, http.StatusSeeOther},
+		{"proxy rewrote Host, X-Forwarded-Host", map[string]string{"Origin": "https://dash.ts.net", "X-Forwarded-Host": "dash.ts.net"}, http.StatusSeeOther},
+		{"cross-site with a forged Origin", map[string]string{"Origin": "http://example.com", "Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"same-site subdomain", map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden},
+		{"origin null without fetch metadata", map[string]string{"Origin": "null"}, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("token="+testToken+"&next=/"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, v := range tc.hdr {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s: status %d, want %d (%s)", tc.name, rec.Code, tc.want, strings.TrimSpace(rec.Body.String()))
+		}
+	}
+}

@@ -51,14 +51,19 @@ func isJSON(ct string) bool {
 	return err == nil && mt == "application/json"
 }
 
-// sameOrigin reports whether a request was not sent cross-site. A request with
-// neither header is a non-browser client (curl, dashd push) and is allowed;
-// browsers always send Origin on a cross-origin POST.
+// sameOrigin reports whether a request was not sent cross-site.
+//
+// Sec-Fetch-Site, when present, decides: the browser sets it and a page cannot
+// forge or remove it, and it is right even where Origin is not. Origin is not
+// always usable: a form submitted from a page served with a no-referrer policy
+// carries "Origin: null" even when it is same-origin, and behind a reverse
+// proxy the Host the server sees need not be the one the browser used. Origin
+// is therefore only the fallback, for browsers too old to send Sec-Fetch-Site.
+// A request with neither header is a non-browser client (curl, dashd push) and
+// is allowed; every current browser sends Sec-Fetch-Site on a cross-site POST.
 func sameOrigin(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
-		if site != "same-origin" && site != "none" {
-			return false
-		}
+		return site == "same-origin" || site == "none"
 	}
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -71,7 +76,11 @@ func sameOrigin(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(u.Host, r.Host)
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	fwd := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
+	return fwd != "" && strings.EqualFold(u.Host, fwd)
 }
 
 // WithHostCheck refuses requests whose Host header is not this server's. An IP
