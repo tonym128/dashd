@@ -1590,12 +1590,14 @@ updateSortIcons('tools-table', toolSort);
         const curTo = params.get('date_to') || '';
         const d7 = new Date(now); d7.setDate(d7.getDate() - 6);
         const d30 = new Date(now); d30.setDate(d30.getDate() - 29);
+        const mtdStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
         document.querySelectorAll('[data-date-preset]').forEach(btn => {
             const p = btn.dataset.datePreset;
             const isMatch =
                 (p === 'today' && curFrom === todayStr && curTo === todayStr) ||
                 (p === '7d' && curFrom === isoDate(d7) && curTo === todayStr) ||
+                (p === 'mtd' && curFrom === isoDate(mtdStart) && curTo === todayStr) ||
                 (p === '30d' && curFrom === isoDate(d30) && curTo === todayStr) ||
                 (p === 'all' && !curFrom && !curTo);
             btn.classList.toggle('is-active', isMatch);
@@ -1608,6 +1610,7 @@ updateSortIcons('tools-table', toolSort);
                 } else {
                     const start = new Date(now);
                     if (p === '7d') start.setDate(start.getDate() - 6);
+                    if (p === 'mtd') start.setDate(1);
                     if (p === '30d') start.setDate(start.getDate() - 29);
                     dateFromEl.value = isoDate(start);
                     dateToEl.value = todayStr;
