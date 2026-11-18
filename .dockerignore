@@ -38,6 +38,6 @@ README.md
 packaging/
 Makefile
 
-# Python bytecode from update_models.py.
+# Python bytecode.
 __pycache__/
 *.pyc

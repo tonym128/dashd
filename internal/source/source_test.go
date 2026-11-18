@@ -90,7 +90,7 @@ func TestPricerPrefersLiveCatalogueThenFallback(t *testing.T) {
 // The previous version asserted that a million input tokens of gemini-2.5-pro
 // cost between $1.20 and $1.30, which is a claim about a vendor's price list
 // rather than about this code: models.json is a 410KB dump rewritten by
-// update_models.py, so a price change broke CI for reasons unrelated to any
+// `dashd update-models`, so a price change broke CI for reasons unrelated to any
 // parser. Everything asserted here holds whatever the prices are.
 //
 // What is still pinned: a known model resolves, a known model costs something,

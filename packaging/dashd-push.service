@@ -6,12 +6,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Set DASHD_REMOTE and DASHD_AUTH_TOKEN in ~/.config/dashd/push.env:
-#   DASHD_REMOTE=https://dashd.example.com
-#   DASHD_AUTH_TOKEN=your-secret-token
-EnvironmentFile=%h/.config/dashd/push.env
-ExecStart=/usr/local/bin/dashd push -interval 30s -models %h/.local/share/dashd/models.json -models-refresh 24h -db %h/.local/share/dashd/push-state.db
-Restart=on-failure
+# Put the server URL in ~/.config/dashd/push.env (DASHD_REMOTE=https://...)
+# and the server's write-only ingest token, alone, in ~/.config/dashd/ingest.token
+# (chmod 600). packaging/install.sh writes both for you.
+EnvironmentFile=-%h/.config/dashd/push.env
+ExecStart=/usr/bin/dashd push -interval 30s -models %h/.local/share/dashd/models.json -models-refresh 24h -state-db %h/.local/share/dashd/push-state.db -ingest-token-file %h/.config/dashd/ingest.token
+# Always: dashd exits 3 after -auto-update installs a new release.
+Restart=always
 RestartSec=10
 
 [Install]

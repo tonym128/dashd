@@ -26,29 +26,46 @@ go build -o dashd ./cmd/dashd
 | Command | What it does |
 |---|---|
 | `serve-and-scan` | Serve the dashboard and scan on a timer (default) |
-| `serve` | Serve only; the database is maintained elsewhere (or receives `dashd push`) |
+| `serve` | Serve only; data arrives from `dashd push` agents (accepts ingest) |
 | `scan` | One pass, then exit — for cron or a systemd timer |
-| `push` | Scan local logs and push updates to a remote `dashd` server |
-| `reprice` | Recompute every stored cost from the current price table |
+| `push` | Scan local logs and push them, in batches, to a remote `dashd` server |
+| `status` | Show this machine's push state: last success, last error, server version |
+| `reprice` | Recompute every stored cost (and day bucket) from the current price table |
+| `prune` | Delete calls before `-before YYYY-MM-DD`; pruned history is not re-ingested |
+| `backup` | Write a consistent copy of the database to `-out` (safe while serving) |
+| `export` | Write calls as CSV or JSON (`-format`, `-out`, filter flags) |
+| `digest` | Print a Markdown usage digest, or POST it to `-webhook-url` |
+| `insights` | Print usage insights (`-json`, filter flags) |
 | `update-models` | Download the latest OpenRouter model pricing to `-models` |
+| `self-update` | Install the latest release (checksum-verified, never downgrades) |
+| `doctor` | Check agent logs, pricing, the database and the remote server |
 | `stats` | Print a summary of the database and the last scan of each source |
 
-## Flags
+## Common flags
+
+`dashd -h` lists every flag. The ones most setups need:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-db` | `~/.local/share/dashd/dashboard.db` | Database path (also stores local cursors for `push`) |
-| `-addr` | `127.0.0.1:8753` | Listen address; `0.0.0.0` exposes it to the network |
-| `-auth-token` | none | Require/send bearer token (also `DASHD_AUTH_TOKEN`) |
+| `-db` | `~/.local/share/dashd/dashboard.db` | Database path |
+| `-addr` | `127.0.0.1:8753` | Listen address; a non-loopback address requires a token |
+| `-auth-token-file` / `-auth-token` | none | Dashboard token (also `DASHD_AUTH_TOKEN`); browsers sign in at `/login` |
+| `-ingest-token-file` / `-ingest-token` | none | Write-only token for push agents (also `DASHD_INGEST_TOKEN`) |
+| `-admin-token-file` / `-admin-token` | none | Token for reprice/prune/forget/rename (also `DASHD_ADMIN_TOKEN`) |
+| `-machine-tokens-file` | none | `machine token` lines; each token may only push as its machine |
+| `-accept-ingest` | off (on for `serve`) | Accept pushes on a `serve-and-scan` server |
+| `-tls-cert`, `-tls-key` | none | Serve HTTPS directly |
+| `-tz` | host zone | Timezone used to bucket calls into days (also `DASHD_TZ`) |
 | `-interval` | `30s` | How often to scan or push |
 | `-home` | `$HOME` | Where to look for agent logs |
 | `-machine` | hostname | Machine name attached to scanned sessions and calls |
-| `-remote` | none | Remote `dashd` base URL for `push` (also `DASHD_REMOTE`) |
-| `-once` | off | For `push`, run one pass and exit instead of looping |
-| `-models` | next to the binary, one level above it, the working directory, or one level above that; else `./models.json` | OpenRouter price dump |
-| `-models-refresh` | `0` | Auto-update `models.json` from OpenRouter on this interval (e.g. `24h`) |
-| `-opencode` | inside `-home` | OpenCode database path |
-| `-verbose` | off | Log every request and scan detail |
+| `-remote` | none | Server URL for `push` (also `DASHD_REMOTE`) |
+| `-redact-paths` | `none` | For `push`: `home`, `basename` or `hash` project paths before sending |
+| `-models` | next to the binary, `~/.local/share/dashd`, `/usr/share/dashd` | OpenRouter price dump |
+| `-models-refresh` | `0` | Auto-update `models.json` on this interval (e.g. `24h`) and reprice |
+| `-daily-budget`, `-monthly-budget` | none | Budget alerts in the UI and, with `-webhook-url`, by webhook |
+| `-webhook-url`, `-digest-every` | none | Budget alerts and periodic digests to Slack/Discord-style webhooks |
+| `-tags-file` | none | JSON `{ "tag": ["/project/prefix", ...] }` for cost-centre reporting |
 
 ## How it works
 
@@ -81,9 +98,11 @@ Three details keep incremental scans accurate:
 
 ### Pricing
 
-[`models.json`](models.json) (refreshed with `python3 update_models.py`) is the source of truth for model rates, backed by an embedded fallback table ([`internal/source/manual_pricing.json`](internal/source/manual_pricing.json)) and provider overrides ([`internal/source/pricing_overrides.json`](internal/source/pricing_overrides.json)).
+[`models.json`](models.json) (refreshed with `dashd update-models`, or automatically with `-models-refresh 24h`) is the source of truth for model rates, backed by an embedded fallback table ([`internal/source/manual_pricing.json`](internal/source/manual_pricing.json)) and provider overrides ([`internal/source/pricing_overrides.json`](internal/source/pricing_overrides.json)).
 
 Models without a known rate are recorded as **unpriced** rather than `$0.00` so unknown costs are never confused with free usage. Running `dashd reprice` recomputes all stored calls against the current price table.
+
+A central server prices every pushed call itself, with its own table, and buckets days in its own timezone (`-tz`), so totals do not depend on which laptop sent them.
 
 ## Layout
 
@@ -119,52 +138,55 @@ docker run --rm \
   ghcr.io/tonym128/dashd scan
 ```
 
-To expose the dashboard, pass both `-addr 0.0.0.0:8753` and `-auth-token`:
+To expose the dashboard, bind a non-loopback address and give it a token (dashd refuses to start otherwise):
 
 ```bash
 docker run -d -p 127.0.0.1:8753:8753 \
+  -e DASHD_AUTH_TOKEN="$(openssl rand -hex 32)" \
   -v "$HOME/.claude:/home/dashd/.claude:ro" \
   -v dashd-data:/var/lib/dashd \
   ghcr.io/tonym128/dashd \
-  serve-and-scan \
-    -addr 0.0.0.0:8753 \
-    -auth-token "$(openssl rand -hex 32)" \
-    -models /usr/local/lib/dashd/models.json \
-    -db /var/lib/dashd/dashboard.db
+  serve-and-scan -addr 0.0.0.0:8753 \
+    -models /usr/local/lib/dashd/models.json -db /var/lib/dashd/dashboard.db
 ```
 
 Note that the container UID must match your local user to read `0700` agent directories, and the named volume must be owned by that UID.
 
 ## Remote server & multi-machine push
 
-You can run `dashd` as a central server (for example in Docker) and push incremental logs from your **Linux**, **macOS**, and **Windows** machines. Each pushed session and call records the originating machine name (`-machine`, defaulting to the host's hostname), and the dashboard lets you filter and search by machine.
+Run `dashd serve` as a central server and push incremental logs from your **Linux**, **macOS** and **Windows** machines. Each session and call records its machine (`-machine`, default the hostname); the dashboard filters by machine and shows each one's health on the System tab.
 
-### 1. Start the remote server (Docker)
+### 1. Start the server
 
-Use [docker-compose.yml](docker-compose.yml) (or `Dockerfile` directly):
+With [docker-compose.yml](docker-compose.yml), which requires both tokens:
 
 ```bash
-export DASHD_AUTH_TOKEN="$(openssl rand -hex 32)"
+export DASHD_AUTH_TOKEN="$(openssl rand -hex 32)"     # people and the browser
+export DASHD_INGEST_TOKEN="$(openssl rand -hex 32)"   # push agents, write-only
 docker compose up -d
 ```
 
-The server exposes the web UI and `POST /api/ingest` on port `8753`, both protected by `DASHD_AUTH_TOKEN`.
+Or natively: `curl -fsSL https://raw.githubusercontent.com/tonym128/dashd/main/packaging/install.sh | bash -s -- --server`.
 
-### 2. Run the push agent on each machine
+### 2. Install the push agent on each machine
 
-Interactive installers download the latest release, prompt for your server URL, auth token, machine name, push interval, and `models.json` auto-update interval, and start the background service:
+Give each machine the **ingest** token, not the dashboard token.
 
 - **Linux & macOS**:
   ```bash
   curl -fsSL https://raw.githubusercontent.com/tonym128/dashd/main/packaging/install.sh | bash
+  # unattended:
+  curl -fsSL .../install.sh | bash -s -- --remote https://dashd.example.com --token-file ./ingest.token --yes
   ```
 - **Windows (PowerShell)**:
   ```powershell
   irm https://raw.githubusercontent.com/tonym128/dashd/main/packaging/install.ps1 | iex
   ```
 
-Prebuilt static binaries for **Linux** (`amd64`/`arm64`), **macOS** (`amd64`/`arm64`), and **Windows** (`amd64`) are also available on the [Releases](https://github.com/tonym128/dashd/releases) page, and manual service templates are in [packaging/](packaging/).
+The installers verify the download against the release's signed `checksums.txt`, store the token in a file only you can read, and install a service that restarts itself (systemd user unit, LaunchAgent, or a hidden scheduled task). `dashd status` shows the agent's last push and last error. Options include `--redact-paths`, `--auto-update 24h`, `--version` and `--uninstall`; see `install.sh --help`.
+
+Packages: release pages carry `.deb`, `.rpm` and Arch packages; there is a Homebrew formula (`brew install tonym128/tap/dashd`) and a Scoop manifest when the tap and bucket are set up, and a source [PKGBUILD](packaging/aur/PKGBUILD).
 
 ## Security
 
-By default, `dashd` binds to `127.0.0.1` with no authentication. If you expose it on a non-loopback address (`-addr 0.0.0.0`), pass `-auth-token` and send `Authorization: Bearer <token>`. See [SECURITY.md](SECURITY.md) for the threat model and safer ways to supply the token.
+By default, `dashd` binds to `127.0.0.1` with no authentication, refuses cross-site writes and DNS-rebinding requests, and does not accept pushes. A non-loopback address needs a token: browsers sign in at `/login`, API clients send `Authorization: Bearer <token>`. See [SECURITY.md](SECURITY.md) for the roles, token files and threat model.

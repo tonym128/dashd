@@ -44,28 +44,21 @@ RestartSec=5s
 # every local user a credential. SECURITY.md documents the limitation and the
 # cases where it does matter.
 #
-# If you change -addr to a non-loopback address, you need a token, and you should
-# know that argv is the wrong place to put it. dashd reads the flag ONLY — there
-# is no DASHD_AUTH_TOKEN and no config file, so an Environment= line for such a
-# variable would be ignored by the binary and would look like protection that is
-# not there. Until the binary reads one, the options are: leave the bind on
-# loopback and reach the dashboard through an SSH tunnel, or put a reverse proxy
-# in front that terminates TLS and authenticates.
+# If you change -addr to a non-loopback address, dashd refuses to start without
+# a token. Keep the token out of argv (any local user can read it with ps): put
+# it alone in a root-owned 0600 file and point -auth-token-file at it.
 #
-# Were an environment variable to be added, the arrangement would be an
-# EnvironmentFile= alongside this unit, with the file root-owned and mode 0600:
-#
-#   # /etc/dashd.env  (chmod 0600, chown root:)
-#   DASHD_AUTH_TOKEN=<64 hex chars>
+#   # /etc/dashd/auth.token  (chmod 0600, chown <service user>:)
+#   <64 hex chars>
 #
 #   # in this unit:
-#   EnvironmentFile=/etc/dashd.env
 #   ExecStart=/usr/local/bin/dashd serve-and-scan \
-#       -addr 127.0.0.1:8753 -models /usr/local/share/dashd/models.json
+#       -addr 0.0.0.0:8753 -auth-token-file /etc/dashd/auth.token \
+#       -models /usr/local/share/dashd/models.json
 #
-# Note the point of EnvironmentFile here: a 0600 root-owned file is not in argv,
-# and `systemctl show` does not expand it. It is shown as a shape, not as
-# something that works today.
+# DASHD_AUTH_TOKEN in an EnvironmentFile= also works; the file is the better
+# choice because it is not visible through /proc/<pid>/environ to root tools
+# that dump environments.
 # ---------------------------------------------------------------------------
 
 # A dashboard is not a system service and must not be root.
@@ -195,7 +188,7 @@ WantedBy=multi-user.target
 #
 # models.json MUST be present. Without it dashd still starts, still reports
 # that it priced your calls, and shows $0.00 for all of them. Refresh it with
-# `python3 update_models.py` after pulling a new release.
+# `dashd update-models -models /usr/local/share/dashd/models.json` (or run with -models-refresh 24h).
 # ===========================================================================
 
 # ===========================================================================

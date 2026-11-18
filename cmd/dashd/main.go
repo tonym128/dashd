@@ -673,5 +673,16 @@ func modelsPathFrom(exePath, workDir string) string {
 			}
 		}
 	}
+	// Where the installers and the .deb/.rpm/Homebrew packages put it.
+	var shared []string
+	if home, err := os.UserHomeDir(); err == nil {
+		shared = append(shared, filepath.Join(home, ".local/share/dashd/models.json"))
+	}
+	shared = append(shared, "/usr/share/dashd/models.json", "/usr/local/share/dashd/models.json")
+	for _, candidate := range shared {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
 	return "models.json"
 }

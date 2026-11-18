@@ -128,7 +128,7 @@ RUN addgroup -g 10001 -S dashd \
 # It is baked rather than fetched during the build on purpose: the build stays
 # hermetic and reproducible, and the price data that shipped is the same
 # reviewed data that is in git. Refresh it deliberately with
-# `python3 update_models.py && docker build .`, never implicitly.
+# `dashd update-models -models models.json && docker build .`, never implicitly.
 #
 # LOCATION MATTERS, and this is not cosmetic. defaultModelsPath() looks for
 # models.json beside the executable and one directory above it, so the dump is
@@ -197,13 +197,11 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 #     docker run ... <image> serve-and-scan \
 #       -addr 0.0.0.0:8753 -auth-token "$(openssl rand -hex 32)"
 #
-# There is deliberately no ENV DASHD_AUTH_TOKEN here. cmd/dashd reads the token
-# from the flag only — it does not consult the environment — so an ENV would be
-# a variable that silently does nothing, which is worse than no variable at all.
-# Support for DASHD_AUTH_TOKEN is a follow-up in cmd/, and it belongs there:
-#
-#     TODO: read DASHD_AUTH_TOKEN in cmd/dashd/cli.go, then add
-#       ENV DASHD_AUTH_TOKEN="" here with a comment saying the default is empty.
+# The token can come from the environment (DASHD_AUTH_TOKEN, DASHD_INGEST_TOKEN,
+# DASHD_ADMIN_TOKEN) or, better, from a mounted secret file via
+# -auth-token-file /run/secrets/dashd_token, which keeps it out of
+# `docker inspect`. A non-loopback -addr without a token is refused at startup
+# unless -insecure-no-auth is passed.
 #
 # With no command given, the container serves on its own loopback. That is still
 # useful: `docker run img scan` and `docker run img stats` are unaffected, and

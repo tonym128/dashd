@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -45,7 +46,9 @@ func readSecretFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o077 != 0 {
+	// Unix permission bits only; Windows reports 0666 for any writable file and
+	// protects the file with its ACL instead.
+	if fi, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 		slog.Default().Warn("secret file is readable by other users; chmod 600 it", "path", path,
 			"mode", fmt.Sprintf("%04o", fi.Mode().Perm()))
 	}
@@ -67,7 +70,7 @@ func loadMachineTokens(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("-machine-tokens-file: %w", err)
 	}
 	defer f.Close()
-	if fi, err := f.Stat(); err == nil && fi.Mode().Perm()&0o077 != 0 {
+	if fi, err := f.Stat(); err == nil && runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 		slog.Default().Warn("machine tokens file is readable by other users; chmod 600 it", "path", path)
 	}
 	out := map[string]string{}
