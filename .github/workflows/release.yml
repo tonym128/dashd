@@ -36,8 +36,8 @@ jobs:
         # it prices those 41 and reports every other model as $0.00.
         #
         # So the probe uses a model that is in the OpenRouter catalogue but NOT
-        # in that compiled-in table. x-ai/grok-build-0.1 prices at $1.00/M
-        # in and $2.00/M out, so 1M + 1M is $3.00 if the catalogue loaded and
+        # in that compiled-in table. mistral-large-2407 prices at $2.00/M
+        # in and $6.00/M out, so 1M + 1M is $8.00 if the catalogue loaded and
         # $0.00 if only the fallback is present. An earlier version of this
         # step seeded claude-sonnet-4-5, which is in the fallback table, and
         # therefore passed even with pricing completely broken.
@@ -47,7 +47,7 @@ jobs:
           # The quoted heredoc is deliberate: this is literal JSON and must not
           # be expanded by the shell.
           cat > /tmp/home/.claude/projects/p1/s.jsonl <<'EOF'
-          {"type":"assistant","message":{"model":"x-ai/grok-build-0.1","usage":{"input_tokens":1000000,"output_tokens":1000000}}}
+          {"type":"assistant","message":{"model":"mistralai/mistral-large-2407","usage":{"input_tokens":1000000,"output_tokens":1000000}}}
           EOF
           # No -models flag: this also asserts that the price dump is
           # discoverable, since `scan` replaces CMD and drops any flag that

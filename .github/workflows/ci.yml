@@ -232,6 +232,8 @@ jobs:
       # models.json) before a tag rather than at release time.
       - run: docker build -t dashd:ci .
       - run: docker run --rm dashd:ci -version
+      # -models-refresh replaces the price dump as the service user.
+      - run: docker run --rm --entrypoint sh dashd:ci -c 'test -w "$(dirname "$(readlink -f /usr/local/lib/dashd/models.json)")"'
 
   installers:
     name: installers (shellcheck, PSScriptAnalyzer, smoke)

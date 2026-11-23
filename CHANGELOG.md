@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.4] - 2026-11-23
+## [0.9.5] - 2026-11-23
 
 ### Fixed
 
@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change is needed.
 - Gemini 4 Neon is priced, including without a price dump, and Antigravity's
   model id for it is known. The bundled price dump is refreshed.
+
+## [0.9.4] - 2026-11-23 [not published]
 
 ## [0.9.3] - 2026-11-18
 
