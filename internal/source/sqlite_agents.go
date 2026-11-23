@@ -106,8 +106,10 @@ var agyModelNames = map[int32]string{
 	1417: "Gemini 4 Argon (High)",
 	1418: "Gemini 4 Argon (Medium)",
 	// Read from a conversation's gen_metadata, which pairs
-	// MODEL_PLACEHOLDER_M526 with this label and the API id gemini-4-hydrogen.
+	// MODEL_PLACEHOLDER_M526 with this label and the API id gemini-4-hydrogen,
+	// and M533 with gemini-4-neon.
 	1526: "Gemini 4 Hydrogen (Medium)",
+	1533: "Gemini 4 Neon (Medium)",
 }
 
 func NewAntigravityParser() Parser { return &AntigravityParser{} }

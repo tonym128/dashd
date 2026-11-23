@@ -1089,6 +1089,7 @@ func TestAntigravityModelMappingAndPricing(t *testing.T) {
 		{1417, "Gemini 4 Argon (High)", "gemini-4-argon"},
 		{1418, "Gemini 4 Argon (Medium)", "gemini-4-argon"},
 		{1526, "Gemini 4 Hydrogen (Medium)", "gemini-4-hydrogen"},
+		{1533, "Gemini 4 Neon (Medium)", "gemini-4-neon"},
 	}
 
 	for _, tc := range cases {

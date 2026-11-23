@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-11-23
+
+### Fixed
+
+- `-models-refresh` never worked in the container image: the price dump lived in
+  a root-owned directory the service user cannot write, so prices stayed at the
+  ones the image was built with and newer models showed as unpriced. The dump
+  now lives in a directory that user owns, linked from the old path; no compose
+  change is needed.
+- Gemini 4 Neon is priced, including without a price dump, and Antigravity's
+  model id for it is known. The bundled price dump is refreshed.
+
 ## [0.9.3] - 2026-11-18
 
 ### Fixed

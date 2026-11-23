@@ -76,6 +76,13 @@ func WriteModelsBytes(payload []byte, destPath string) (int, error) {
 		return 0, fmt.Errorf("models response contained 0 entries; refusing to overwrite %s", destPath)
 	}
 
+	// Follow a symlink to the real file: the container image keeps the dump in a
+	// directory the service user can write and links to it from beside the
+	// root-owned binary. Renaming over the link itself would need write access
+	// to the binary's directory.
+	if target, err := filepath.EvalSymlinks(destPath); err == nil {
+		destPath = target
+	}
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return 0, fmt.Errorf("create directory %s: %w", dir, err)

@@ -142,8 +142,14 @@ RUN addgroup -g 10001 -S dashd \
 # colocation that is load-bearing.
 # ---------------------------------------------------------------------------
 COPY --from=build /out/dashd /usr/local/lib/dashd/dashd
-COPY models.json /usr/local/lib/dashd/models.json
-RUN chmod 0755 /usr/local/lib/dashd/dashd
+# The dump itself sits in a directory the dashd user owns, because
+# -models-refresh replaces it by renaming a temp file created next to it. The
+# binary's own directory stays root-owned; a symlink keeps the colocated path
+# working, and WriteModelsBytes follows it.
+COPY models.json /usr/local/share/dashd/models.json
+RUN chmod 0755 /usr/local/lib/dashd/dashd \
+ && chown -R dashd:dashd /usr/local/share/dashd \
+ && ln -s /usr/local/share/dashd/models.json /usr/local/lib/dashd/models.json
 
 USER dashd
 
