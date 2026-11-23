@@ -937,6 +937,12 @@ func (s *Store) Reprice(ctx context.Context, price func(model string, in, out, c
 			for _, r := range batch {
 				// output + reasoning is the billable generated count.
 				cost, priced := price(r.model, r.in, r.out_+r.reasoning, r.cacheRead, r.cacheWrite, r.cacheWrite1h)
+				if !priced && r.priced && r.cost > 0 {
+					// The model has left the price list since this call was
+					// priced. The old cost is the best figure there is; zeroing
+					// it would erase spend that happened.
+					cost, priced = r.cost, true
+				}
 				day := r.day
 				if r.ts > 0 {
 					day = time.Unix(r.ts, 0).Local().Format("2006-01-02")

@@ -1,6 +1,7 @@
 package source
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -46,7 +47,7 @@ func openReadOnly(path string) (*sql.DB, error) {
 // rather than re-decoding a few hundred blobs every time.
 type AntigravityParser struct {
 	// labels are model labels read from the conversation's own gen_metadata,
-	// consulted only for ids agyModelNames does not know.
+	// which take precedence over agyModelNames.
 	labels map[int32]string
 }
 
@@ -74,28 +75,27 @@ const (
 // An id missing from this map is a model released after this build. It is named
 // plainly and counted as unpriced rather than being guessed at, so the cost
 // shows as unknown instead of silently as zero.
+//
+// Entries are checked against the labels and API ids conversations record in
+// gen_metadata; an id no conversation confirms does not belong here.
+// 1196 and 1322 are "tiered" API ids that carry no effort label.
 var agyModelNames = map[int32]string{
 	342:  "Gemini 3.1 Flash Lite",
-	1016: "Gemini 3.8 Flash (Low)",
-	1020: "Gemini 3.8 Flash (Medium)",
-	1021: "Gemini 3.8 Flash (High)",
+	1016: "Gemini 3.1 Pro (High)",
+	1020: "Gemini 3.5 Flash (Medium)",
 	1026: "Claude Opus 4.6 (Thinking)",
 	1035: "Claude Sonnet 4.6 (Thinking)",
-	1036: "Claude Sonnet 4.6",
-	1037: "Claude Opus 4.6",
-	1050: "Gemini 3.8 Pro (Low)",
-	1071: "Gemini 3.8 Pro (Medium)",
-	1072: "Gemini 3.8 Pro (High)",
-	1073: "Gemini 3.8 Pro (Thinking)",
-	1196: "GPT-OSS 120B (Medium)",
-	1266: "GPT-OSS 120B",
-	1298: "Gemini 3.1 Pro (Low)",
-	1299: "Gemini 3.1 Pro (Medium)",
-	1300: "Gemini 3.1 Pro (High)",
-	1318: "Gemini 3.1 Flash (Low)",
+	1036: "Gemini 3.1 Pro (Low)",
+	1071: "Gemini 3.6 Flash (High)",
+	1073: "Gemini 3.6 Flash (Low)",
+	1196: "Gemini 3.6 Flash",
+	1264: "Gemini 3.6 Flash (High)",
+	1266: "Gemini 3.6 Flash (Low)",
+	1300: "Gemini 3.7 Flash (Low)",
+	1318: "Gemini 3.8 Flash (High)",
 	1319: "Gemini 3.8 Flash (Medium)",
-	1320: "Gemini 3.1 Flash (Medium)",
-	1322: "Gemini 3.1 Flash (High)",
+	1320: "Gemini 3.8 Flash (Low)",
+	1322: "Gemini 3.8 Flash",
 	1400: "Claude Opus 5.5 (Low)",
 	1401: "Claude Opus 5.5 (Medium)",
 	1402: "Claude Opus 5.5 (High)",
@@ -109,6 +109,7 @@ var agyModelNames = map[int32]string{
 	// MODEL_PLACEHOLDER_M526 with this label and the API id gemini-4-hydrogen,
 	// and M533 with gemini-4-neon.
 	1526: "Gemini 4 Hydrogen (Medium)",
+	1530: "Gemini 4 Hydrogen (High)",
 	1533: "Gemini 4 Neon (Medium)",
 }
 
@@ -242,9 +243,11 @@ func (p *AntigravityParser) consumeStep(b *sessionBuilder, idx int64, stepType, 
 		}
 
 		modelID := int32(u[agyUsageModel])
-		modelName, known := agyModelNames[modelID]
+		// What Antigravity recorded wins; the built-in table only covers
+		// conversations that recorded no label for this id.
+		modelName, known := p.labels[modelID]
 		if !known {
-			modelName, known = p.labels[modelID]
+			modelName, known = agyModelNames[modelID]
 		}
 		if !known {
 			modelName = fmt.Sprintf("Antigravity Model %d", modelID)
@@ -1174,7 +1177,7 @@ func agyLabelsFromGenMetadata(db *sql.DB) map[int32]string {
 	if err != nil {
 		return nil
 	}
-	out := map[int32]string{}
+	votes := map[int32]map[string]int{}
 	vals := make([]any, len(cols))
 	ptrs := make([]any, len(cols))
 	for i := range vals {
@@ -1182,7 +1185,7 @@ func agyLabelsFromGenMetadata(db *sql.DB) map[int32]string {
 	}
 	for rows.Next() {
 		if err := rows.Scan(ptrs...); err != nil {
-			return out
+			return agyMajorityLabels(votes)
 		}
 		for _, v := range vals {
 			var b []byte
@@ -1194,27 +1197,55 @@ func agyLabelsFromGenMetadata(db *sql.DB) map[int32]string {
 			default:
 				continue
 			}
-			placeholder, label := "", ""
+			// The row also carries prompt text, which may mention any model, so
+			// a row naming two enums is ignored and the most common label wins.
+			placeholders := map[string]bool{}
+			label := ""
 			for _, run := range printableRunRe.FindAll(b, -1) {
 				str := strings.Trim(string(run), "\"*$")
-				if m := agyPlaceholderRe.FindStringSubmatch(str); m != nil && placeholder == "" {
-					placeholder = m[1]
-				} else if label == "" && agyLabelRe.MatchString(str) {
+				if m := agyPlaceholderRe.FindStringSubmatch(str); m != nil {
+					placeholders[m[1]] = true
+				} else if label == "" && agyLabelRe.MatchString(str) && agyLengthPrefixed(b, str) {
 					label = str
 				}
 			}
-			if placeholder == "" || label == "" {
+			if len(placeholders) != 1 || label == "" {
 				continue
 			}
-			n, err := strconv.Atoi(placeholder)
-			if err != nil || n < 0 || n > 100000 {
-				continue
-			}
-			id := int32(1000 + n)
-			if _, seen := out[id]; !seen {
-				out[id] = label
+			for ph := range placeholders {
+				n, err := strconv.Atoi(ph)
+				if err != nil || n < 0 || n > 100000 {
+					continue
+				}
+				id := int32(1000 + n)
+				if votes[id] == nil {
+					votes[id] = map[string]int{}
+				}
+				votes[id][label]++
 			}
 		}
+	}
+	return agyMajorityLabels(votes)
+}
+
+// agyLengthPrefixed reports whether s appears in b as a protobuf string field:
+// preceded by its own length.
+func agyLengthPrefixed(b []byte, s string) bool {
+	return bytes.Contains(b, append([]byte{byte(len(s))}, s...))
+}
+
+// agyMajorityLabels picks the most common label for each id, the
+// alphabetically first on a tie so a rescan gives the same answer.
+func agyMajorityLabels(votes map[int32]map[string]int) map[int32]string {
+	out := make(map[int32]string, len(votes))
+	for id, labels := range votes {
+		best, bestN := "", 0
+		for l, n := range labels {
+			if n > bestN || n == bestN && l < best {
+				best, bestN = l, n
+			}
+		}
+		out[id] = best
 	}
 	return out
 }

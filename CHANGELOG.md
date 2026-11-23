@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-11-23
+
+The database migrates to schema version 11 on first start (a copy is written
+first); older binaries refuse the migrated database.
+
+### Fixed
+
+- Antigravity models are named the way Antigravity names them: the label a
+  conversation records takes precedence over the built-in id table, and wrong
+  table entries are corrected (3.5, 3.6 and 3.7 Flash, 3.1 Pro and others were
+  shown as "Gemini 3.8 Pro", GPT-OSS, Sonnet and so on). Every Antigravity
+  conversation is re-read once; update push agents as well as the server.
+
+- Repricing keeps the stored cost of a call whose model has since left the price
+  list, instead of resetting it to $0.00 unpriced.
+
 ## [0.9.5] - 2026-11-23
 
 ### Fixed

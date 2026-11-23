@@ -100,6 +100,34 @@ func TestRepriceCountsOnlyChangedRowsAndRebuckets(t *testing.T) {
 	}
 }
 
+// A model that has left the price list must not take its recorded spend with
+// it, but a call that never had a price stays unpriced.
+func TestRepriceKeepsCostOfDelistedModel(t *testing.T) {
+	ctx := context.Background()
+	st, _ := Open(filepath.Join(t.TempDir(), "p.db"))
+	defer st.Close()
+	ts := time.Date(2026, 3, 1, 12, 0, 0, 0, time.Local)
+	writeSession(t, st, "known", ts)
+	writeSession(t, st, "unknown", ts)
+	if _, err := st.DB().Exec(`UPDATE call SET cost_usd = 0, priced = 0 WHERE session_uid = 'unknown'`); err != nil {
+		t.Fatal(err)
+	}
+	delisted := func(string, int64, int64, int64, int64, int64) (float64, bool) { return 0, false }
+	if n, err := st.Reprice(ctx, delisted); err != nil || n != 0 {
+		t.Fatalf("reprice = %d, %v; want 0 changed", n, err)
+	}
+	for uid, want := range map[string]float64{"known": 1, "unknown": 0} {
+		var cost float64
+		var priced int
+		if err := st.DB().QueryRow(`SELECT cost_usd, priced FROM call WHERE session_uid = ?`, uid).Scan(&cost, &priced); err != nil {
+			t.Fatal(err)
+		}
+		if cost != want || float64(priced) != want {
+			t.Errorf("%s: cost %v priced %d, want %v", uid, cost, priced, want)
+		}
+	}
+}
+
 func TestResolveIngestUIDAndInstanceID(t *testing.T) {
 	st, _ := Open(filepath.Join(t.TempDir(), "p.db"))
 	defer st.Close()
