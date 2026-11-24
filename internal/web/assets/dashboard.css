@@ -1918,3 +1918,8 @@ a.bar-segment { display: block; }
 
 body.is-loading { cursor: progress; }
 body.is-loading main { opacity: 0.6; transition: opacity 0.15s 0.1s; }
+
+/* Prices */
+.price-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; }
+.price-grid input { width: 100%; }
+.plain-list { list-style: none; display: grid; gap: 4px; }

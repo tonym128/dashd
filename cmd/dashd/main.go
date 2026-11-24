@@ -195,6 +195,17 @@ func run(o options, command string, stdout io.Writer) error {
 	log.Debug("pricing configured", "models", o.models)
 	priceFn := priceAt(pricer)
 
+	if command != "push" {
+		if command == "reprice" && o.currentPrices {
+			if err := st.ClearPrices(""); err != nil {
+				return err
+			}
+		}
+		if err := pricer.SyncHistory(ctx, st, time.Now()); err != nil {
+			return err
+		}
+	}
+
 	if command == "reprice" {
 		n, err := st.Reprice(ctx, priceFn)
 		if err != nil {
@@ -270,7 +281,7 @@ func run(o options, command string, stdout io.Writer) error {
 			return err
 		}
 		if o.modelsRefresh > 0 {
-			go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, nil, log)
+			go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, nil, nil, log)
 		}
 		if o.autoUpdate > 0 {
 			go runAutoUpdater(ctx, o.autoUpdate, log, stop)
@@ -303,6 +314,9 @@ func run(o options, command string, stdout io.Writer) error {
 	srv.ScanInfo = scanner.Status
 	srv.ScanDuration = scanner.LastDuration
 	srv.AuthEnabled = o.authToken != ""
+	srv.PriceAdmin = priceAdmin{st, pricer}
+	srv.PriceStatus = &web.PriceStatus{}
+	srv.PriceStatus.Configure(o.modelsRefresh, pricer.LiveCatalogueSize())
 	if command == "serve" {
 		// No local scanner: report the last ingest instead.
 		srv.ScanInfo = nil
@@ -312,7 +326,7 @@ func run(o options, command string, stdout io.Writer) error {
 	defer cancel()
 
 	if o.modelsRefresh > 0 {
-		go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, st, log)
+		go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, st, srv.PriceStatus, log)
 	}
 	if o.webhookURL != "" {
 		go web.RunNotifier(ctx, st, web.NotifierConfig{
@@ -465,11 +479,21 @@ func priceAt(pricer *source.Pricer) func(m string, in, out, cacheRead, cacheWrit
 	}
 }
 
-func runModelsRefresher(ctx context.Context, path string, interval time.Duration, pricer *source.Pricer, st *store.Store, log *slog.Logger) {
+func runModelsRefresher(ctx context.Context, path string, interval time.Duration, pricer *source.Pricer, st *store.Store, status *web.PriceStatus, log *slog.Logger) {
 	refresh := func() {
 		rctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
+		if st != nil {
+			// Models first used since the last sync are recorded at the prices
+			// they were charged, before those change.
+			if err := pricer.SyncHistory(ctx, st, time.Now()); err != nil {
+				log.Warn("record prices failed", "error", err)
+			}
+		}
 		n, err := source.UpdateModels(rctx, source.OpenRouterModelsURL, path)
+		if status != nil {
+			status.Attempt(time.Now(), n, err)
+		}
 		if err != nil {
 			log.Warn("auto-update models failed", "path", path, "error", err)
 			return
@@ -480,6 +504,10 @@ func runModelsRefresher(ctx context.Context, path string, interval time.Duration
 		}
 		log.Info("auto-updated models", "path", path, "models", n)
 		if st != nil {
+			if err := pricer.SyncHistory(ctx, st, time.Now()); err != nil {
+				log.Warn("record prices failed", "error", err)
+				return
+			}
 			repriced, err := st.Reprice(ctx, priceAt(pricer))
 			if err != nil {
 				log.Warn("auto-reprice after models update failed", "error", err)

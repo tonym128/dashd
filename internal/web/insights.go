@@ -50,6 +50,8 @@ type InsightInputs struct {
 	MonthlyBudget float64
 	CacheSavings  float64
 	Machines      []machineStatusView
+	// PriceError is why the last price refresh failed, if it did.
+	PriceError string
 	// Query is the page's current filter, kept on action links so following
 	// an insight narrows the view rather than resetting it.
 	Query url.Values
@@ -111,6 +113,17 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 			Severity:    "warn",
 			Headline:    fmt.Sprintf("%s is failing to push (%s)", m.Machine, m.LastErrorAgo),
 			Detail:      "Last error: " + m.LastError + ". Its newest sessions are missing from these totals; run `dashd status` on that machine.",
+			ActionLabel: "Open System tab",
+			ActionURL:   withQuery(in.Query, map[string]string{"view": "system"}),
+		})
+	}
+	if in.PriceError != "" {
+		out = append(out, Insight{
+			ID:          "price-refresh-failing",
+			Category:    "Data Health",
+			Severity:    "warn",
+			Headline:    "The price list is not refreshing",
+			Detail:      "Last error: " + in.PriceError + ". New models will show as unpriced and price changes will be missed.",
 			ActionLabel: "Open System tab",
 			ActionURL:   withQuery(in.Query, map[string]string{"view": "system"}),
 		})

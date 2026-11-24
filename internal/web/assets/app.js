@@ -412,6 +412,39 @@
             }
         });
     }
+    const priceForm = document.getElementById('admin-price-form');
+    async function savePrice(body, done) {
+        try {
+            const res = await dashdPost('/api/admin/price', body);
+            toast(done + ': ' + (res.repriced || 0) + ' calls changed');
+            setTimeout(() => location.reload(), 900);
+        } catch (err) {
+            toast('Price change failed: ' + err.message);
+        }
+    }
+    if (priceForm) {
+        priceForm.addEventListener('submit', e => {
+            e.preventDefault();
+            const num = id => Number(document.getElementById(id).value) || 0;
+            savePrice({
+                model: document.getElementById('price-model').value.trim(),
+                input: num('price-input'), output: num('price-output'),
+                cache_read: num('price-read'), cache_write: num('price-write'),
+                all_history: document.getElementById('price-all').checked,
+            }, 'Price set');
+        });
+        document.addEventListener('click', e => {
+            const pick = e.target.closest && e.target.closest('[data-price-model]');
+            if (pick) {
+                document.getElementById('price-model').value = pick.dataset.priceModel;
+                document.getElementById('price-input').focus();
+            }
+            const drop = e.target.closest && e.target.closest('[data-remove-price]');
+            if (drop && window.confirm('Remove the price set for ' + drop.dataset.removePrice + '?')) {
+                savePrice({ model: drop.dataset.removePrice, remove: true }, 'Price removed');
+            }
+        });
+    }
     const pruneForm = document.getElementById('admin-prune-form');
     if (pruneForm) {
         pruneForm.addEventListener('submit', async e => {

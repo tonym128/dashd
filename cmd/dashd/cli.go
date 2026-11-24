@@ -40,6 +40,7 @@ type options struct {
 	machine       string
 	remote        string
 	once          bool
+	currentPrices bool
 	before        string
 	dailyBudget   float64
 	monthlyBudget float64
@@ -150,6 +151,8 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 	fs.BoolVar(&o.vacuum, "vacuum", true, "for 'prune', VACUUM afterwards to reclaim disk space")
 	fs.StringVar(&o.stateDB, "state-db", filepath.Join(home, ".local/share/dashd/push-state.db"),
 		"for 'push' and 'status', the local cursor database")
+	fs.BoolVar(&o.currentPrices, "current-prices", false,
+		"for 'reprice', forget the recorded price history and apply today's prices to all of it")
 	fs.BoolVar(&o.resync, "resync", false, "for 'push', forget local cursors and resend all history")
 	fs.StringVar(&o.redactPaths, "redact-paths", "none",
 		"for 'push', how project and log paths are sent: none, home (strip $HOME), basename, or hash")
@@ -260,7 +263,7 @@ Commands:
   scan            one scan pass, print totals, exit (for cron or a timer)
   push            scan local logs and push updates to a remote dashd server
   status          show this machine's push state: last push, last error, cursors
-  reprice         re-cost every stored call with the current price dump
+  reprice         re-cost every stored call at the price in force when it was made
   prune           delete calls older than -before YYYY-MM-DD and vacuum the DB
   backup          write a consistent copy of the database to -out (safe while serving)
   export          write calls as CSV or JSON (-format, -out, filter flags)

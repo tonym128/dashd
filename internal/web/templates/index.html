@@ -537,12 +537,49 @@
   </div>
   {{end}}
 
+  <div class="section" data-view-section="system" id="prices-section">
+    <div class="section-header"><span>Prices</span>{{if .Prices.Enabled}}<span class="badge">{{.Prices.Models}} models in the catalogue</span>{{end}}</div>
+    <div class="admin-grid">
+      <div class="admin-card">
+        <h3>Catalogue</h3>
+        {{if .Prices.Enabled}}
+        <p>Last refreshed: {{.Prices.LastSuccess}}. Refreshes every {{.Prices.Every}} (0s is off).</p>
+        {{if .Prices.LastError}}<p class="scan-error">Last refresh failed ({{.Prices.LastAttempt}}): {{.Prices.LastError}}</p>{{end}}
+        {{else}}<p>Refresh status is not available.</p>{{end}}
+        <p>A price change applies from the day it is seen; earlier calls keep what they cost.</p>
+        {{if .Unpriced}}<h3>Unpriced models</h3>
+        <ul class="plain-list">{{range .Unpriced}}<li><button type="button" class="btn-ghost" data-price-model="{{.Model}}">{{.Model}}</button> <span class="muted">{{.Calls}} calls</span></li>{{end}}</ul>{{end}}
+      </div>
+      <form class="admin-card" id="admin-price-form">
+        <h3>Set a price</h3>
+        <label for="price-model">Model</label>
+        <input id="price-model" list="price-models" required maxlength="200">
+        <datalist id="price-models">{{range .Facets.Models}}<option value="{{.}}">{{end}}</datalist>
+        <p>Dollars per million tokens.</p>
+        <div class="price-grid">
+          <label>Input <input type="number" id="price-input" min="0" step="any" required></label>
+          <label>Output <input type="number" id="price-output" min="0" step="any" required></label>
+          <label>Cache read <input type="number" id="price-read" min="0" step="any" value="0"></label>
+          <label>Cache write <input type="number" id="price-write" min="0" step="any" value="0"></label>
+        </div>
+        <label class="checkbox"><input type="checkbox" id="price-all" checked> Apply to past calls too</label>
+        <button type="submit" class="btn btn-primary">Set price</button>
+      </form>
+    </div>
+    {{if .PriceChanges}}
+    <table id="price-changes-table">
+      <thead><tr><th>Model</th><th>From</th><th class="numeric">Input</th><th class="numeric">Output</th><th class="numeric">Cache read</th><th class="numeric">Cache write</th><th>Source</th><th></th></tr></thead>
+      <tbody>{{range .PriceChanges}}<tr><td>{{.Model}}</td><td>{{.From}}</td><td class="numeric">{{.Input}}</td><td class="numeric">{{.Output}}</td><td class="numeric">{{.Read}}</td><td class="numeric">{{.CacheW}}</td><td>{{.Source}}</td><td>{{if .Manual}}<button type="button" class="btn-ghost btn-danger" data-remove-price="{{.Model}}">Remove</button>{{end}}</td></tr>{{end}}</tbody>
+    </table>
+    {{end}}
+  </div>
+
   <div class="section" data-view-section="system" id="admin-section">
     <div class="section-header"><span>Maintenance</span><span class="badge">admin</span></div>
     <div class="admin-grid">
       <div class="admin-card">
         <h3>Reprice</h3>
-        <p>Recompute every stored cost from the current price table, after <code>dashd update-models</code>.</p>
+        <p>Recompute every stored cost at the price in force when the call was made. <code>dashd reprice -current-prices</code> applies today's prices to all history.</p>
         <button id="reprice-btn" type="button" class="btn btn-secondary">Reprice all calls</button>
       </div>
       <form class="admin-card" id="admin-prune-form">

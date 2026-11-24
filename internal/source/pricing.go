@@ -111,6 +111,8 @@ type Pricer struct {
 	mu       sync.RWMutex
 	cache    map[string]resolved
 	liveKeys []string
+	// history is the recorded prices by normalised model, see SyncHistory.
+	history map[string][]pricePoint
 }
 
 type resolved struct {
@@ -400,11 +402,11 @@ func (p *Pricer) CostCall(model string, input, output, cacheRead, cacheWrite, ca
 
 // CostCallAt is CostCall at the rates in force when the call was made.
 func (p *Pricer) CostCallAt(at time.Time, model string, input, output, cacheRead, cacheWrite, cacheWrite1h int) (float64, bool) {
-	all, ok := p.Resolve(model)
+	all, ok := p.ratesAt(model, at)
 	if !ok {
 		return 0, false
 	}
-	rates := all.at(at).forPrompt(input + cacheRead + cacheWrite)
+	rates := all.forPrompt(input + cacheRead + cacheWrite)
 	if cacheWrite1h > cacheWrite {
 		cacheWrite1h = cacheWrite
 	}

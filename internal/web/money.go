@@ -20,3 +20,5 @@ func groupDollars(s string) string {
 }
 
 func usd(v float64) string { return groupDollars(fmt.Sprintf("$%.2f", v)) }
+
+func sprintf4(v float64) string { return fmt.Sprintf("$%.4f", v) }

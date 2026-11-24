@@ -52,6 +52,9 @@ type Server struct {
 	// ModelsPath, when set, is served at GET /api/models and advertised via
 	// models_etag in /api/ingest responses so push clients stay in sync.
 	ModelsPath string
+	// PriceStatus and PriceAdmin power the Prices panel. Optional.
+	PriceStatus *PriceStatus
+	PriceAdmin  PriceAdmin
 	// RepriceFunc, when set, powers POST /api/reprice.
 	RepriceFunc func(context.Context) (int, error)
 	// Optional soft spending thresholds for burn-rate alerts & insights.
@@ -119,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/reprice", s.handleReprice)
+	mux.HandleFunc("/api/admin/price", s.handleAdminPrice)
 	mux.HandleFunc("/api/admin/prune", s.handleAdminPrune)
 	mux.HandleFunc("/api/admin/forget-session", s.handleAdminForgetSession)
 	mux.HandleFunc("/api/admin/rename-machine", s.handleAdminRenameMachine)
@@ -291,6 +295,9 @@ type pageData struct {
 	SourcesSummary    string
 	SourcesNeedAction bool
 	Machines          []machineStatusView
+	Prices            priceView
+	PriceChanges      []priceChangeView
+	Unpriced          []store.UnpricedModel
 	Insights          []Insight
 	TopInsights       []Insight
 	GeneratedEpoch    int64
@@ -467,10 +474,19 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 
 	views, _ := s.scanViews(ctx)
 	sources := sourceViews(views)
+	prices := s.PriceStatus.view(now)
+	pricePoints, err := s.store.PriceHistory(ctx)
+	if err != nil {
+		return pageData{}, err
+	}
+	unpriced, err := s.store.UnpricedModels(ctx)
+	if err != nil {
+		return pageData{}, err
+	}
 	insights := BuildInsightsFull(InsightInputs{
 		Signals: signals, Totals: totals, Burn: burn, Forecast: fc,
 		DailyBudget: s.DailyBudget, MonthlyBudget: s.MonthlyBudget,
-		CacheSavings: savings, Machines: machineViews, Query: query, Now: now,
+		CacheSavings: savings, Machines: machineViews, PriceError: prices.LastError, Query: query, Now: now,
 	})
 	cards := burnCards(burn)
 	if fc.OK {
@@ -503,6 +519,9 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		Sources:        sources,
 		SourcesSummary: sourceSummary(sources),
 		Machines:       machineViews,
+		Prices:         prices,
+		PriceChanges:   priceChanges(pricePoints),
+		Unpriced:       unpriced,
 		Insights:       insights,
 		TopInsights:    topInsights(insights),
 		AuthEnabled:    s.AuthEnabled,
