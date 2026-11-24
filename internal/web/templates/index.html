@@ -116,7 +116,7 @@
         <input type="date" name="date_to" id="date_to" min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}">
       </div>
       <div class="filter-actions">
-        <button type="submit">Apply</button>
+        <button type="submit" class="btn btn-primary">Apply</button>
         <a href="/" class="clear-link">Clear</a>
         {{if .FilterState.Active}}
         <span class="filter-active-note">Filtered &mdash; Clear returns to everything.</span>
