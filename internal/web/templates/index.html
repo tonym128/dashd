@@ -522,7 +522,7 @@
       <tbody>{{range .Budgets}}<tr>
         <td title="{{.Name}}"><span class="badge">{{.Scope}}</span> {{.Label}}</td>
         <td class="numeric">{{.SpentText}}</td><td class="numeric">{{.ProjectedText}}</td><td class="numeric">{{.MonthlyText}}</td>
-        <td><progress class="budget-{{.State}}" max="100" value="{{printf "%.0f" .Pct}}"></progress> {{if eq .State "over"}}<span class="c-red">over</span>{{else if eq .State "forecast"}}<span class="c-yellow">on track to pass</span>{{end}}</td>
+        <td data-sort-value="{{printf "%.0f" .Pct}}"><progress class="budget-{{.State}}" max="100" value="{{printf "%.0f" .Pct}}"></progress> {{if eq .State "over"}}<span class="c-red">over</span>{{else if eq .State "forecast"}}<span class="c-yellow">on track to pass</span>{{end}}</td>
         <td><button type="button" class="btn-ghost btn-danger" data-remove-budget="{{.Name}}" data-scope="{{.Scope}}">Remove</button></td>
       </tr>{{end}}</tbody>
     </table>
@@ -580,10 +580,13 @@
     <div class="section-header"><span>Cost per commit</span><span class="badge">spend in the project since the commit before</span></div>
     <div data-swap="commits">
     {{if .Commits}}
+    {{if gt .CommitTotal (len .Commits)}}<p class="section-note">Showing {{len .Commits}} of {{.CommitTotal}}: the most expensive and the newest.</p>{{end}}
+    <div class="activity-table-wrap">
     <table id="commits-table">
       <thead><tr><th>Commit</th><th>When</th><th>Project</th><th class="numeric">Calls</th><th class="numeric">Cost</th></tr></thead>
-      <tbody>{{range .Commits}}<tr><td class="project-name"><code>{{.Hash}}</code> {{.Subject}}</td><td>{{.When}}</td><td title="{{.Project}}">{{.ProjectName}}</td><td class="numeric">{{.Calls}}</td><td class="numeric">{{.Cost}}</td></tr>{{end}}</tbody>
+      <tbody>{{range .Commits}}<tr><td class="project-name" data-sort-value="{{.Subject}}"><code>{{.Hash}}</code> {{.Subject}}</td><td>{{.When}}</td><td title="{{.Project}}">{{.ProjectName}}</td><td class="numeric">{{.Calls}}</td><td class="numeric">{{.Cost}}</td></tr>{{end}}</tbody>
     </table>
+    </div>
     {{else}}<div class="empty-state"><strong>No commits in this view.</strong><span>Run <code>dashd push</code> or <code>serve-and-scan</code> with <code>-git</code> to match commits with sessions. It is off by default because it sends commit subjects.</span></div>{{end}}
     </div>
   </div>
@@ -789,6 +792,7 @@
 </script>
 <script src="/assets/dashboard.js"></script>
 <script src="/assets/app.js"></script>
+<script src="/assets/tables.js"></script>
 </body>
 </html>
 {{end}}
@@ -954,6 +958,7 @@
 </div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script src="/assets/session.js"></script>
+<script src="/assets/tables.js"></script>
 </body>
 </html>
 {{end}}

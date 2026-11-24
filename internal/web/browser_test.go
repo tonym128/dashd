@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tonym128/dashd/internal/model"
+	"github.com/tonym128/dashd/internal/store"
 )
 
 // Browser tests: the real page, laid out by a real browser.
@@ -305,5 +306,61 @@ func TestBrowserFiltersInPlace(t *testing.T) {
 	if !got.Kept || got.Before != 2 || got.After != 1 || got.Back != 2 || got.Picker != "1 selected" ||
 		!strings.Contains(got.Chip, "claude") || got.Cost != "$24,690.00" || !got.RangeRemoved || got.Daily != 7 {
 		t.Errorf("%+v", got)
+	}
+}
+
+func TestBrowserEveryColumnSorts(t *testing.T) {
+	srv, st := newTestServer(t)
+	srv.Generated = time.Now
+	now := time.Now()
+	var commits []model.Commit
+	for i, cost := range []float64{2, 1000, 30} {
+		at := now.Add(time.Duration(i-5) * time.Hour)
+		spend(t, st, "a", "/w/a", at, cost)
+		commits = append(commits, model.Commit{Project: "/w/a", Hash: fmt.Sprintf("abcdef0%d", i), TS: at.Unix() + 1, Subject: "c" + fmt.Sprint(i)})
+	}
+	if err := st.SaveCommits("box", commits); err != nil {
+		t.Fatal(err)
+	}
+	h := srv.Handler()
+	var got struct {
+		Dead             []string
+		Desc, Asc, After []string
+	}
+	probe(t, h, 1440, "/?view=all&range=all", `
+		const out = {};
+		out.Dead = [...doc.querySelectorAll('table thead th')].filter(th => {
+		  const s = th.textContent.trim();
+		  return s && s !== 'Actions' && !th.querySelector('button.sort-btn');
+		}).map(th => th.closest('table').id + ': ' + th.textContent.trim());
+		const costs = () => [...doc.querySelectorAll('#commits-table tbody tr')].map(r => r.cells[4].textContent);
+		const head = () => doc.querySelectorAll('#commits-table th')[4].querySelector('button');
+		head().click(); out.Desc = costs();
+		head().click(); out.Asc = costs();
+		doc.querySelector('[data-date-preset="7d"]').click(); await sleep(900);
+		out.After = costs();
+		return out;`, &got)
+	if len(got.Dead) > 0 {
+		t.Errorf("columns that do not sort: %q", got.Dead)
+	}
+	desc, asc := "$1,000.00 $30.00 $2.00", "$2.00 $30.00 $1,000.00"
+	if strings.Join(got.Desc, " ") != desc || strings.Join(got.Asc, " ") != asc || strings.Join(got.After, " ") != asc {
+		t.Errorf("%+v", got)
+	}
+	var dead []string
+	probe(t, h, 1440, "/session?uid=a", `return [...doc.querySelectorAll('table thead th')].filter(th => th.textContent.trim() && !th.querySelector('button.sort-btn')).map(th => th.textContent);`, &dead)
+	if len(dead) > 0 {
+		t.Errorf("session page: %q", dead)
+	}
+}
+
+func TestTopCommitsKeepsDearestAndNewest(t *testing.T) {
+	in := make([]store.CommitCost, 2000)
+	for i := range in {
+		in[i].Cost = float64(i) // the oldest are the dearest
+	}
+	out := topCommits(in)
+	if len(out) != maxCommitRows || out[0].Cost != 0 || out[len(out)-1].Cost != 1999 {
+		t.Errorf("%d rows, %v..%v", len(out), out[0].Cost, out[len(out)-1].Cost)
 	}
 }

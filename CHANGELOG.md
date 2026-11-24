@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Every table column sorts, on the dashboard and on session pages. The commits
+  table lists the dearest commits of the view as well as the newest.
+
 ## [0.10.0] - 2026-11-25
 
 The database migrates to schema version 12 on first start (a copy is written

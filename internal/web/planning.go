@@ -314,6 +314,35 @@ type commitView struct {
 	Calls                                                    int
 }
 
+const maxCommitRows = 500
+
+// topCommits picks what the page lists: the dearest and the newest, so sorting
+// by cost shows the real top of the view and not just of its latest page.
+func topCommits(commits []store.CommitCost) []store.CommitCost {
+	if len(commits) <= maxCommitRows {
+		return commits
+	}
+	order := make([]int, len(commits))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return commits[order[a]].Cost > commits[order[b]].Cost })
+	keep := make(map[int]bool, maxCommitRows)
+	for _, i := range order[:maxCommitRows/2] {
+		keep[i] = true
+	}
+	for i := 0; len(keep) < maxCommitRows; i++ {
+		keep[i] = true
+	}
+	out := make([]store.CommitCost, 0, maxCommitRows)
+	for i, c := range commits {
+		if keep[i] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func commitViews(commits []store.CommitCost) []commitView {
 	out := make([]commitView, 0, len(commits))
 	for _, c := range commits {

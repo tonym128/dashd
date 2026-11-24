@@ -52,7 +52,7 @@ func TestAppJSRendersComparisonAndTagsEscaped(t *testing.T) {
 
 func TestNewScriptsHaveNoInlineHandlersAndAreServed(t *testing.T) {
 	srv, _ := newTestServer(t)
-	for _, name := range []string{"app.js", "session.js"} {
+	for _, name := range []string{"app.js", "session.js", "tables.js"} {
 		script := stripLineComments(readAsset(t, assets, "assets/"+name))
 		for _, h := range []string{" onclick=", " onerror=", " onload=", "javascript:"} {
 			if strings.Contains(script, h) {

@@ -29,7 +29,7 @@ import (
 	"github.com/tonym128/dashd/internal/store"
 )
 
-//go:embed assets/dashboard.css assets/dashboard.js assets/app.js assets/session.js
+//go:embed assets/dashboard.css assets/dashboard.js assets/app.js assets/session.js assets/tables.js
 var assets embed.FS
 
 //go:embed templates/*.html
@@ -159,7 +159,7 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	switch name {
 	case "dashboard.css":
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	case "dashboard.js", "app.js", "session.js":
+	case "dashboard.js", "app.js", "session.js", "tables.js":
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	default:
 		http.NotFound(w, r)
@@ -307,6 +307,7 @@ type pageData struct {
 	Commits           []commitView
 	RateLimits        []rateLimitView
 	RateLimitTotal    int
+	CommitTotal       int
 	Plans             []planView
 	CatalogueModels   []string
 	PriceChanges      []priceChangeView
@@ -500,7 +501,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	if err != nil {
 		return pageData{}, err
 	}
-	commits, err := s.store.CommitCosts(ctx, filter, 100)
+	commits, err := s.store.CommitCosts(ctx, filter, 0)
 	if err != nil {
 		return pageData{}, err
 	}
@@ -563,7 +564,8 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		SourcesSummary:  sourceSummary(sources),
 		Machines:        machineViews,
 		Prices:          prices,
-		Commits:         commitViews(commits),
+		Commits:         commitViews(topCommits(commits)),
+		CommitTotal:     len(commits),
 		RateLimits:      rateLimitViews(limits),
 		RateLimitTotal:  limitTotal,
 		Budgets:         budgets,

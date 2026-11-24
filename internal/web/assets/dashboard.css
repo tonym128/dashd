@@ -679,7 +679,8 @@ tr:hover {
     border-top: 1px solid var(--border-color);
 }
 
-#activity-table th {
+#activity-table th,
+#commits-table th {
     position: sticky;
     top: 0;
     z-index: 1;

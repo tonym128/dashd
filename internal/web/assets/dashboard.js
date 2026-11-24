@@ -1495,7 +1495,7 @@ updateSortIcons('tools-table', toolSort);
                 ? bucket.llm_seconds / bucket.messages : 0;
             const partial = bucket.t === current;
             return '<tr>' +
-                '<td class="bucket-label' + (partial ? ' current' : '') + '">' +
+                '<td class="bucket-label' + (partial ? ' current' : '') + '" data-sort-value="' + bucket.t + '">' +
                     escapeHtml(bucketLabel(bucket.t, step)) +
                     (partial ? ' (partial)' : '') + '</td>' +
                 '<td class="numeric">' + formatFullNumber(bucket.messages) + '</td>' +
