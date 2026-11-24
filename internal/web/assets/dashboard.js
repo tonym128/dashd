@@ -181,7 +181,7 @@ const dashboardData = window.dashboardData || {};
 
             // Insert monthly total separator when month changes
             // (after we have seen all days of the previous month)
-            if (prevMonth && month !== prevMonth) {
+            if (rollupMode === 'daily' && prevMonth && month !== prevMonth) {
                 html += renderMonthRow(prevMonth, monthTotals[prevMonth]);
             }
             prevMonth = month;
@@ -208,16 +208,16 @@ const dashboardData = window.dashboardData || {};
         });
 
         // Monthly total for the last visible month
-        if (prevMonth) {
+        if (rollupMode === 'daily' && prevMonth) {
             html += renderMonthRow(prevMonth, monthTotals[prevMonth]);
         }
 
         // Toggle button
-        const totalDays = dailyStats.length;
+        const totalDays = aggregateSpending(dailyStats, rollupMode).length;
         if (totalDays > RECENT_DAYS) {
             const label = showAll
-                ? 'Show last 14 days'
-                : `Show all ${totalDays} days`;
+                ? `Show last ${RECENT_DAYS}`
+                : `Show all ${totalDays} ${{ weekly: 'weeks', monthly: 'months' }[rollupMode] || 'days'}`;
             html += `<div class="daily-toggle-row">
                 <button data-toggle-daily-chart class="copy-btn">${label}</button>
             </div>`;
@@ -252,10 +252,11 @@ const dashboardData = window.dashboardData || {};
             </div>`;
     }
 
-    function toggleDailyChart() {
+    document.getElementById('daily-chart-content')?.addEventListener('click', event => {
+        if (!event.target.closest('[data-toggle-daily-chart]')) return;
         showAll = !showAll;
         render();
-    }
+    });
 
     render();
 })();
@@ -503,13 +504,13 @@ function renderProjects() {
         return `
             <tr class="expandable-row" data-toggle-project="${rowId}" tabindex="0" aria-expanded="false">
                 <td class="project-name" title="${escapeHtml(p.name)}"><span class="expand-icon">▶</span> ${escapeHtml(shortName)}</td>
-                <td>${p.sessions}</td>
-                <td title="${formatFullNumber(p.messages)}">${formatCompactNumber(p.messages)}</td>
-                <td class="tokens">${tokenCellHtml(p)}</td>
-                <td class="c-purple">${p.llm_time_display}</td>
-                <td class="c-yellow">${p.tool_time_display}</td>
-                <td class="c-blue">${(p.avg_tps || 0).toFixed(1)}</td>
-                <td class="cost">$${p.cost.toFixed(2)}</td>
+                <td class="numeric">${p.sessions}</td>
+                <td class="numeric" title="${formatFullNumber(p.messages)}">${formatCompactNumber(p.messages)}</td>
+                <td class="tokens numeric">${tokenCellHtml(p)}</td>
+                <td class="c-purple numeric">${p.llm_time_display}</td>
+                <td class="c-yellow numeric">${p.tool_time_display}</td>
+                <td class="c-blue numeric">${(p.avg_tps || 0).toFixed(1)}</td>
+                <td class="cost numeric">$${p.cost.toFixed(2)}</td>
                 <td class="numeric" title="average cost per session">$${Number(p.per_session || 0).toFixed(2)}</td>
                 <td class="c-muted">${p.last_activity_display}</td>
             </tr>
@@ -645,13 +646,13 @@ function renderSessions() {
             <tr>
                 <td class="project-name" title="${escapeHtml(s.cwd)}">${escapeHtml(shortProject)}${machineBadge}${titleLine}</td>
                 <td class="c-muted">${s.start_display}</td>
-                <td class="c-muted">${s.duration_display}</td>
-                <td class="c-purple">${s.llm_time_display}</td>
-                <td class="c-yellow">${s.tool_time_display || '0s'}</td>
-                <td class="c-blue">${(s.avg_tps || 0).toFixed(1)}</td>
-                <td title="${formatFullNumber(s.messages)}">${formatCompactNumber(s.messages)}</td>
-                <td class="tokens">${tokenCellHtml(s)}</td>
-                <td class="cost">$${s.cost.toFixed(2)}</td>
+                <td class="c-muted numeric">${s.duration_display}</td>
+                <td class="c-purple numeric">${s.llm_time_display}</td>
+                <td class="c-yellow numeric">${s.tool_time_display || '0s'}</td>
+                <td class="c-blue numeric">${(s.avg_tps || 0).toFixed(1)}</td>
+                <td class="numeric" title="${formatFullNumber(s.messages)}">${formatCompactNumber(s.messages)}</td>
+                <td class="tokens numeric">${tokenCellHtml(s)}</td>
+                <td class="cost numeric">$${s.cost.toFixed(2)}</td>
                 <td>
                     <button data-copy-resume data-resume-cmd="${escapeHtml(resumeCmd)}" class="icon-btn" title="Copy resume command">Copy</button>
                     ${s.orphaned
@@ -760,10 +761,6 @@ function setupDelegatedActions() {
             copyResumeCommand(btn);
             return;
         }
-        if (event.target.closest('[data-toggle-daily-chart]')) {
-            toggleDailyChart();
-            return;
-        }
         if (event.target.closest('[data-reload]')) {
             location.reload();
             return;
@@ -861,16 +858,16 @@ function renderProviders() {
         return `
             <tr>
                 <td><span class="model-tag ${escapeHtml(provClass)}" title="${escapeHtml(modelsList)}">${escapeHtml(p.name)}</span></td>
-                <td title="${formatFullNumber(p.messages)}">${formatCompactNumber(p.messages)}</td>
-                <td class="tokens" title="${escapeHtml(breakdown)}">${formatCompactNumber(p.tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(p.input_tokens)}">${formatCompactNumber(p.input_tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(p.output_tokens)}">${formatCompactNumber(p.output_tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(p.cache_read_tokens)}">${formatCompactNumber(p.cache_read_tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(p.cache_write_tokens)}">${formatCompactNumber(p.cache_write_tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(p.reasoning_tokens)}">${formatCompactNumber(p.reasoning_tokens)}</td>
-                <td class="c-blue">${(p.avg_tps || 0).toFixed(1)}</td>
-                <td class="cost">$${p.cost.toFixed(2)}</td>
-                <td>
+                <td class="numeric" title="${formatFullNumber(p.messages)}">${formatCompactNumber(p.messages)}</td>
+                <td class="tokens numeric" title="${escapeHtml(breakdown)}">${formatCompactNumber(p.tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(p.input_tokens)}">${formatCompactNumber(p.input_tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(p.output_tokens)}">${formatCompactNumber(p.output_tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(p.cache_read_tokens)}">${formatCompactNumber(p.cache_read_tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(p.cache_write_tokens)}">${formatCompactNumber(p.cache_write_tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(p.reasoning_tokens)}">${formatCompactNumber(p.reasoning_tokens)}</td>
+                <td class="c-blue numeric">${(p.avg_tps || 0).toFixed(1)}</td>
+                <td class="cost numeric">$${p.cost.toFixed(2)}</td>
+                <td class="numeric">
                     <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${p.pct}%"></div>
                     </div>
@@ -913,18 +910,18 @@ function renderModels() {
         return `
             <tr>
                 <td><span class="model-tag ${modelClass} ${escapeHtml(provClass)}" title="Provider: ${escapeHtml(prov)}">${escapeHtml(m.name)}</span></td>
-                <td title="${formatFullNumber(m.messages)}">${formatCompactNumber(m.messages)}</td>
-                <td class="tokens" title="${escapeHtml(breakdown)}">${formatCompactNumber(m.tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(m.input_tokens)}">${formatCompactNumber(m.input_tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(m.output_tokens)}">${formatCompactNumber(m.output_tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(m.cache_read_tokens)}">${formatCompactNumber(m.cache_read_tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(m.cache_write_tokens)}">${formatCompactNumber(m.cache_write_tokens)}</td>
-                <td class="tokens" title="${formatFullNumber(m.reasoning_tokens)}">${formatCompactNumber(m.reasoning_tokens)}</td>
-                <td class="c-blue">${(m.avg_tps || 0).toFixed(1)}</td>
-                <td class="cost">$${m.cost.toFixed(2)}</td>
+                <td class="numeric" title="${formatFullNumber(m.messages)}">${formatCompactNumber(m.messages)}</td>
+                <td class="tokens numeric" title="${escapeHtml(breakdown)}">${formatCompactNumber(m.tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(m.input_tokens)}">${formatCompactNumber(m.input_tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(m.output_tokens)}">${formatCompactNumber(m.output_tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(m.cache_read_tokens)}">${formatCompactNumber(m.cache_read_tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(m.cache_write_tokens)}">${formatCompactNumber(m.cache_write_tokens)}</td>
+                <td class="tokens numeric" title="${formatFullNumber(m.reasoning_tokens)}">${formatCompactNumber(m.reasoning_tokens)}</td>
+                <td class="c-blue numeric">${(m.avg_tps || 0).toFixed(1)}</td>
+                <td class="cost numeric">$${m.cost.toFixed(2)}</td>
                 <td class="numeric" title="average cost per call">$${Number(m.per_call || 0).toFixed(4)}</td>
                 <td class="numeric" title="cost per 1,000 generated (output + reasoning) tokens">$${Number(m.per_1k_output || 0).toFixed(4)}</td>
-                <td>
+                <td class="numeric">
                     <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${m.pct}%"></div>
                     </div>
@@ -961,11 +958,11 @@ function renderTools() {
         return `
             <tr>
                 <td><span class="model-tag model-other">${escapeHtml(t.name)}</span></td>
-                <td title="${formatFullNumber(t.calls)}">${formatCompactNumber(t.calls)}</td>
-                <td class="c-yellow">${t.time_display}</td>
-                <td class="c-muted">${t.avg_time_display}</td>
-                <td class="${errorClass}">${t.errors}</td>
-                <td title="share of attributed cost: ${share.toFixed(1)}%">
+                <td class="numeric" title="${formatFullNumber(t.calls)}">${formatCompactNumber(t.calls)}</td>
+                <td class="c-yellow numeric">${t.time_display}</td>
+                <td class="c-muted numeric">${t.avg_time_display}</td>
+                <td class="${errorClass} numeric">${t.errors}</td>
+                <td class="numeric" title="share of attributed cost: ${share.toFixed(1)}%">
                     <span class="cost">$${(Number(t.cost) || 0).toFixed(2)}</span>
                     <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${share.toFixed(1)}%; background: var(--accent-green)"></div>
@@ -1558,7 +1555,9 @@ updateSortIcons('tools-table', toolSort);
         if (document.querySelectorAll) {
             document.querySelectorAll('[data-breakdown-panel]').forEach(panel => {
                 const visible = sub === 'all' || panel.dataset.breakdownPanel === sub;
-                panel.classList.toggle('is-hidden', !visible);
+                // Its own class: the view tabs own is-hidden on these same
+                // sections, and sharing it un-hid them on other tabs.
+                panel.classList.toggle('is-sub-hidden', !visible);
             });
         }
         try { localStorage.setItem('dashd:breakdown', sub); } catch (_) {}
@@ -1869,7 +1868,7 @@ updateSortIcons('tools-table', toolSort);
 
     // Enhance multi-select filter <select> elements with searchable checkbox popovers
     if (typeof document.createElement === 'function') {
-        ['model', 'agent', 'project', 'machine'].forEach(id => {
+        ['model', 'agent', 'project', 'machine', 'tag'].forEach(id => {
             const sel = document.getElementById(id);
             if (!sel || !sel.options || !sel.parentNode || !sel.parentNode.insertBefore) return;
             const opts = Array.from(sel.options);

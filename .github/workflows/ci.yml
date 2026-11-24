@@ -72,6 +72,9 @@ jobs:
         # either way, since only ./... crosses the boundary; this step is the
         # one carrying an `=`.
         shell: bash
+        env:
+          # The Linux runner ships Chrome; elsewhere the browser tests may skip.
+          DASHD_REQUIRE_BROWSER: ${{ runner.os == 'Linux' && '1' || '' }}
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage

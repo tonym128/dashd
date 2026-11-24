@@ -365,13 +365,13 @@
         <tr>
           <th data-sort="project">Project / Session <span class="sort-icon">▼</span></th>
           <th data-sort="start">Date <span class="sort-icon">▼</span></th>
-          <th data-sort="duration">Duration <span class="sort-icon">▼</span></th>
-          <th data-sort="llm_time">LLM Time <span class="sort-icon">▼</span></th>
-          <th data-sort="tool_time">Tool Time <span class="sort-icon">▼</span></th>
-          <th data-sort="avg_tps">Tokens/s <span class="sort-icon">▼</span></th>
-          <th data-sort="messages">Messages <span class="sort-icon">▼</span></th>
-          <th data-sort="tokens">Tokens <span class="sort-icon">▼</span></th>
-          <th data-sort="cost">Cost <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="duration">Duration <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="llm_time">LLM Time <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="tool_time">Tool Time <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="avg_tps">Tokens/s <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="messages">Messages <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="tokens">Tokens <span class="sort-icon">▼</span></th>
+          <th class="numeric" data-sort="cost">Cost <span class="sort-icon">▼</span></th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -632,8 +632,6 @@
   projects: {{jsonList .FilterState.Projects}},
   machines: {{jsonList .FilterState.Machines}}
 };</script>
-<script src="/assets/dashboard.js"></script>
-<script src="/assets/app.js"></script>
 <script nonce="{{.Nonce}}">
 (function() {
   // Prefill the filter form from the query, so a reload or a shared link shows
@@ -659,6 +657,8 @@
   if (q.get('date_to')) document.getElementById('date_to').value = q.get('date_to');
 })();
 </script>
+<script src="/assets/dashboard.js"></script>
+<script src="/assets/app.js"></script>
 </body>
 </html>
 {{end}}
