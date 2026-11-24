@@ -128,7 +128,7 @@ func TestForecastAndCacheSavings(t *testing.T) {
 	if !f.OK || f.DaysLeft != 20 || f.Low != 150 || f.High != 250 || f.Projected != 200 {
 		t.Fatalf("forecast = %+v", f)
 	}
-	price := func(m string, in, out, cr, cw, cw1h int64) (float64, bool) {
+	price := func(m string, in, out, cr, cw, cw1h, _ int64) (float64, bool) {
 		return float64(in)*3e-6 + float64(cr)*0.3e-6, true
 	}
 	got := cacheSavings([]store.ModelStat{{Model: "x", CacheReadTokens: 1_000_000}}, price)

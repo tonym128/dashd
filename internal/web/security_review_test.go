@@ -110,7 +110,7 @@ func TestIngestDisabled(t *testing.T) {
 
 func TestIngestServerPricesAndRebucketsDay(t *testing.T) {
 	srv, st := newTestServer(t)
-	srv.Pricer = func(m string, in, out, cr, cw, cw1h int64) (float64, bool) { return 0.5, true }
+	srv.Pricer = func(m string, in, out, cr, cw, cw1h, _ int64) (float64, bool) { return 0.5, true }
 	rec := post(srv.Handler(), "/api/ingest", ingestBody(t, oneSession("u1", "m1", 999)), nil)
 	if rec.Code != 200 {
 		t.Fatalf("ingest: %d %s", rec.Code, rec.Body.String())

@@ -78,14 +78,14 @@ func TestRepriceCountsOnlyChangedRowsAndRebuckets(t *testing.T) {
 	defer st.Close()
 	ts := time.Date(2026, 3, 1, 12, 0, 0, 0, time.Local)
 	writeSession(t, st, "s", ts, ts.Add(time.Hour))
-	same := func(string, int64, int64, int64, int64, int64) (float64, bool) { return 1, true }
+	same := func(string, int64, int64, int64, int64, int64, int64) (float64, bool) { return 1, true }
 	if n, err := st.Reprice(ctx, same); err != nil || n != 0 {
 		t.Fatalf("unchanged reprice = %d, %v; want 0", n, err)
 	}
 	if _, err := st.DB().Exec(`UPDATE call SET day = '1999-01-01'`); err != nil {
 		t.Fatal(err)
 	}
-	double := func(string, int64, int64, int64, int64, int64) (float64, bool) { return 2, true }
+	double := func(string, int64, int64, int64, int64, int64, int64) (float64, bool) { return 2, true }
 	if n, _ := st.Reprice(ctx, double); n != 2 {
 		t.Fatalf("changed reprice = %d, want 2", n)
 	}
@@ -112,7 +112,7 @@ func TestRepriceKeepsCostOfDelistedModel(t *testing.T) {
 	if _, err := st.DB().Exec(`UPDATE call SET cost_usd = 0, priced = 0 WHERE session_uid = 'unknown'`); err != nil {
 		t.Fatal(err)
 	}
-	delisted := func(string, int64, int64, int64, int64, int64) (float64, bool) { return 0, false }
+	delisted := func(string, int64, int64, int64, int64, int64, int64) (float64, bool) { return 0, false }
 	if n, err := st.Reprice(ctx, delisted); err != nil || n != 0 {
 		t.Fatalf("reprice = %d, %v; want 0 changed", n, err)
 	}
@@ -124,6 +124,39 @@ func TestRepriceKeepsCostOfDelistedModel(t *testing.T) {
 		}
 		if cost != want || float64(priced) != want {
 			t.Errorf("%s: cost %v priced %d, want %v", uid, cost, priced, want)
+		}
+	}
+}
+
+// A resent session whose model has left the price list keeps its recorded cost,
+// unless the call itself changed.
+func TestResendKeepsCostOfDelistedModel(t *testing.T) {
+	st, _ := Open(filepath.Join(t.TempDir(), "p.db"))
+	defer st.Close()
+	mk := func(priced bool, cost float64, tokens int) IngestItem {
+		return IngestItem{Replace: true, Session: model.SessionWrite{
+			Session: model.Session{UID: "u", Agent: "claude"},
+			Calls: []model.Call{{SessionUID: "u", Agent: "claude", Model: "m", CallKey: "k",
+				InputTokens: tokens, CostUSD: cost, Priced: priced}}}}
+	}
+	for i, tc := range []struct {
+		item    IngestItem
+		replace bool
+		want    float64
+	}{
+		{mk(true, 3, 10), true, 3},
+		{mk(false, 0, 10), true, 3},
+		{mk(false, 0, 10), false, 3},
+		{mk(true, 2, 10), true, 2},
+		{mk(false, 0, 11), true, 0},
+	} {
+		tc.item.Replace = tc.replace
+		if err := st.ApplyIngest([]IngestItem{tc.item}, nil); err != nil {
+			t.Fatal(err)
+		}
+		var cost float64
+		if err := st.DB().QueryRow(`SELECT cost_usd FROM call`).Scan(&cost); err != nil || cost != tc.want {
+			t.Errorf("step %d: cost %v, %v; want %v", i, cost, err, tc.want)
 		}
 	}
 }

@@ -109,7 +109,7 @@ func TestRepriceSeesOneHourCacheWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gotCW, got1h int64
-	if _, err := st.Reprice(context.Background(), func(_ string, _, _, _, cw, cw1h int64) (float64, bool) {
+	if _, err := st.Reprice(context.Background(), func(_ string, _, _, _, cw, cw1h, _ int64) (float64, bool) {
 		gotCW, got1h = cw, cw1h
 		return 1, true
 	}); err != nil {

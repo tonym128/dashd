@@ -584,6 +584,10 @@ func (s *Store) ReplaceSession(sess model.SessionWrite) error {
 
 func replaceSessionTx(tx *sql.Tx, sess model.SessionWrite) error {
 	{
+		sess, err := keepStoredCosts(tx, sess)
+		if err != nil {
+			return err
+		}
 		if err := clearSession(tx, sess.UID); err != nil {
 			return err
 		}
@@ -594,7 +598,7 @@ func replaceSessionTx(tx *sql.Tx, sess model.SessionWrite) error {
 		// filled in by RecomputeSession. It has to exist before that call:
 		// an UPDATE against a row that was never inserted silently does
 		// nothing, and the session then vanishes from every table.
-		_, err := tx.Exec(`
+		_, err = tx.Exec(`
 			INSERT INTO session (uid, agent, project, machine, path, title, ingested_at) VALUES (?,?,?,?,?,?,?)`,
 			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path, sess.Title, time.Now().Unix())
 		return err
@@ -638,6 +642,10 @@ func appendSessionTx(tx *sql.Tx, sess model.SessionWrite) error {
 				return fmt.Errorf("read stored session metadata for %s: %w", sess.UID, err)
 			}
 		}
+		sess, err := keepStoredCosts(tx, sess)
+		if err != nil {
+			return err
+		}
 		if err := insertSessionRows(tx, sess); err != nil {
 			return err
 		}
@@ -645,7 +653,7 @@ func appendSessionTx(tx *sql.Tx, sess model.SessionWrite) error {
 		// file produced no calls at all. The project is only overwritten when
 		// this pass actually knows one, so an append that learned nothing about
 		// it cannot erase it.
-		_, err := tx.Exec(
+		_, err = tx.Exec(
 			`INSERT INTO session (uid, agent, project, machine, path, ingested_at) VALUES (?,?,?,?,?,?)
 			 ON CONFLICT(uid) DO UPDATE SET
 				project = CASE WHEN excluded.project = '' THEN session.project
@@ -656,6 +664,58 @@ func appendSessionTx(tx *sql.Tx, sess model.SessionWrite) error {
 			sess.UID, sess.Agent, sess.Project, sess.Machine, sess.Path, time.Now().Unix())
 		return err
 	}
+}
+
+// keepStoredCosts carries over the cost of calls about to be rewritten that can
+// no longer be priced, because their model has left the price list since. Only
+// a call that is otherwise unchanged qualifies: the old cost says nothing about
+// a different model or different token counts.
+func keepStoredCosts(tx *sql.Tx, sess model.SessionWrite) (model.SessionWrite, error) {
+	unpriced := false
+	for _, c := range sess.Calls {
+		unpriced = unpriced || !c.Priced
+	}
+	if !unpriced {
+		return sess, nil
+	}
+	type identity struct {
+		key, model            string
+		in, out, cr, cw, cw1h int
+		reasoning             int
+	}
+	rows, err := tx.Query(`
+		SELECT call_key, model, input_tokens, output_tokens, cache_read_tokens,
+		       cache_write_tokens, cache_write_1h_tokens, reasoning_tokens, cost_usd
+		FROM call WHERE session_uid = ? AND priced = 1 AND cost_usd > 0`, sess.UID)
+	if err != nil {
+		return sess, fmt.Errorf("read stored costs of %s: %w", sess.UID, err)
+	}
+	defer rows.Close()
+	stored := map[identity]float64{}
+	for rows.Next() {
+		var id identity
+		var cost float64
+		if err := rows.Scan(&id.key, &id.model, &id.in, &id.out, &id.cr, &id.cw, &id.cw1h, &id.reasoning, &cost); err != nil {
+			return sess, err
+		}
+		stored[id] = cost
+	}
+	if err := rows.Err(); err != nil || len(stored) == 0 {
+		return sess, err
+	}
+	sess.Calls = append([]model.Call(nil), sess.Calls...)
+	for i := range sess.Calls {
+		c := &sess.Calls[i]
+		if c.Priced {
+			continue
+		}
+		id := identity{c.CallKey, c.Model, c.InputTokens, c.OutputTokens, c.CacheReadTokens,
+			c.CacheWriteTokens, c.CacheWrite1hTokens, c.ReasoningTokens}
+		if cost, ok := stored[id]; ok {
+			c.CostUSD, c.Priced = cost, true
+		}
+	}
+	return sess, nil
 }
 
 func clearSession(tx *sql.Tx, uid string) error {

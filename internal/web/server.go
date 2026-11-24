@@ -88,7 +88,7 @@ type Server struct {
 }
 
 // PriceFunc prices one call from its token counts. out includes reasoning.
-type PriceFunc func(model string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool)
+type PriceFunc func(model string, in, out, cacheRead, cacheWrite, cacheWrite1h, ts int64) (float64, bool)
 
 // bumpGeneration invalidates cached page payloads after a write.
 func (s *Server) bumpGeneration() { s.generation.Add(1) }

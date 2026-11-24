@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Rates are prices per million tokens. A zero field means "not charged", which
@@ -24,6 +25,31 @@ type Rates struct {
 	// threshold. A call is priced entirely at the highest tier its prompt
 	// reaches, which is how the providers bill it.
 	Tiers []Tier `json:"tiers,omitempty"`
+	// From lists announced price changes, ordered by date. A call is priced at
+	// the rates in force when it was made, so a change never rewrites history.
+	From []DatedRates `json:"from,omitempty"`
+}
+
+// DatedRates is a set of rates that applies from the start of a UTC day.
+type DatedRates struct {
+	Date string `json:"date"` // YYYY-MM-DD
+	Rates
+}
+
+// at returns the rates in force at a moment. A call with no timestamp gets the
+// base rates.
+func (r Rates) at(t time.Time) Rates {
+	out := r
+	if !t.IsZero() {
+		day := t.UTC().Format("2006-01-02")
+		for _, d := range r.From {
+			if day >= d.Date {
+				out = d.Rates
+			}
+		}
+	}
+	out.From = nil
+	return out
 }
 
 // Tier is a set of rates that applies from a prompt size upward.
@@ -41,6 +67,7 @@ func (r Rates) forPrompt(prompt int) Rates {
 		}
 	}
 	out.Tiers = nil
+	out.From = nil
 	return out
 }
 
@@ -321,7 +348,12 @@ func (p *Pricer) resolveUncached(model string) resolved {
 	if r, ok := p.openRouter[NormalizeModel(model)]; ok {
 		return resolved{rates: r, ok: true}
 	}
-	// 2. Fallback table, most specific substring.
+	// 2. Models that cost nothing to call. Before the substring test, which
+	// would price a free variant at its paid namesake's rates.
+	if isFreeModel(model) {
+		return resolved{ok: true}
+	}
+	// 3. Fallback table, most specific substring.
 	lower := strings.ToLower(model)
 	for _, pattern := range p.manualKeys {
 		if strings.Contains(lower, pattern) {
@@ -329,6 +361,25 @@ func (p *Pricer) resolveUncached(model string) resolved {
 		}
 	}
 	return resolved{}
+}
+
+// freeModels are ids, compared exactly, of models with no price: ones served
+// from the user's own hardware, and OpenCode's free "big-pickle".
+var freeModels = map[string]bool{
+	"big-pickle":               true,
+	"bonsai-2-27b":             true,
+	"gemma4:12b":               true,
+	"qwen3-vl-8b":              true,
+	"qwen3-8-flash-next-iq3_s": true,
+}
+
+// isFreeModel reports whether a model is known to cost nothing: a listed id, a
+// "-free" or ":free" variant, or a GGUF file, which only a local runtime loads.
+func isFreeModel(model string) bool {
+	key := NormalizeModel(model)
+	return freeModels[key] ||
+		strings.HasSuffix(key, "-free") || strings.HasSuffix(key, ":free") ||
+		strings.Contains(strings.ToLower(model), "gguf")
 }
 
 // Cost computes the dollar cost of one call, and whether it could be priced.
@@ -344,11 +395,16 @@ func (p *Pricer) Cost(model string, input, output, cacheRead, cacheWrite int) (f
 // The prompt that selects a long-prompt tier is every input bucket together:
 // the parsers store them disjoint, and the providers count all of them.
 func (p *Pricer) CostCall(model string, input, output, cacheRead, cacheWrite, cacheWrite1h int) (float64, bool) {
+	return p.CostCallAt(time.Time{}, model, input, output, cacheRead, cacheWrite, cacheWrite1h)
+}
+
+// CostCallAt is CostCall at the rates in force when the call was made.
+func (p *Pricer) CostCallAt(at time.Time, model string, input, output, cacheRead, cacheWrite, cacheWrite1h int) (float64, bool) {
 	all, ok := p.Resolve(model)
 	if !ok {
 		return 0, false
 	}
-	rates := all.forPrompt(input + cacheRead + cacheWrite)
+	rates := all.at(at).forPrompt(input + cacheRead + cacheWrite)
 	if cacheWrite1h > cacheWrite {
 		cacheWrite1h = cacheWrite
 	}

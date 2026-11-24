@@ -864,7 +864,7 @@ func (s *Store) MachineStatuses(ctx context.Context) ([]MachineStatus, error) {
 // priced at rates from months ago, and priced at no rate at all for a model
 // that was unknown then. Recomputing from the stored token columns makes the
 // correction retroactive, which is the point of keeping them.
-func (s *Store) Reprice(ctx context.Context, price func(model string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool)) (int, error) {
+func (s *Store) Reprice(ctx context.Context, price func(model string, in, out, cacheRead, cacheWrite, cacheWrite1h, ts int64) (float64, bool)) (int, error) {
 	type row struct {
 		session, key, model             string
 		in, out_, cacheRead, cacheWrite int64
@@ -936,7 +936,7 @@ func (s *Store) Reprice(ctx context.Context, price func(model string, in, out, c
 			defer stmt.Close()
 			for _, r := range batch {
 				// output + reasoning is the billable generated count.
-				cost, priced := price(r.model, r.in, r.out_+r.reasoning, r.cacheRead, r.cacheWrite, r.cacheWrite1h)
+				cost, priced := price(r.model, r.in, r.out_+r.reasoning, r.cacheRead, r.cacheWrite, r.cacheWrite1h, r.ts)
 				if !priced && r.priced && r.cost > 0 {
 					// The model has left the price list since this call was
 					// priced. The old cost is the best figure there is; zeroing

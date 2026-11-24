@@ -108,9 +108,9 @@
     "cache_write": 0.375
   },
   "gemini-3.5-flash": {
-    "input": 0.5,
-    "output": 3.0,
-    "cache_read": 0.05,
+    "input": 1.5,
+    "output": 9.0,
+    "cache_read": 0.15,
     "cache_write": 0.0833
   },
   "gemini-3.5-flash-lite": {
@@ -137,16 +137,16 @@
     "output": 0.4
   },
   "gemini-3.6-flash": {
-    "input": 0.5,
-    "output": 3.0,
-    "cache_read": 0.05,
-    "cache_write": 0.0833
+    "input": 0.75,
+    "output": 3.75,
+    "cache_read": 0.075,
+    "cache_write": 0.0417
   },
   "gemini-3.7-flash": {
-    "input": 0.5,
-    "output": 3.0,
-    "cache_read": 0.05,
-    "cache_write": 0.0833
+    "input": 0.75,
+    "output": 3.75,
+    "cache_read": 0.075,
+    "cache_write": 0.0417
   },
   "gemini-3.8-flash": {
     "input": 0.75,

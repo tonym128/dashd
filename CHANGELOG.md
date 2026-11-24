@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-11-24
+
+### Added
+
+- Price overrides can carry a dated change, and calls are priced at the rates in
+  force when they were made. Gemini 3.6 and 3.8 Flash double on 2027-01-01;
+  calls before then keep the introductory rates, also when repriced.
+- Local (GGUF and listed) and "-free" models are priced at $0 instead of being
+  counted as unpriced.
+
+### Fixed
+
+- A resent session keeps the stored cost of calls whose model has left the price
+  list.
+- Built-in fallback rates for Gemini 3.5, 3.6 and 3.7 Flash were too low.
+
 ## [0.9.6] - 2026-11-23
 
 The database migrates to schema version 11 on first start (a copy is written

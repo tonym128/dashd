@@ -208,13 +208,15 @@ func cacheSavings(models []store.ModelStat, price PriceFunc) float64 {
 	if price == nil {
 		return 0
 	}
+	// The rollup has no dates, so savings are valued at today's rates.
 	var saved float64
+	now := time.Now().Unix()
 	for _, m := range models {
 		if m.CacheReadTokens <= 0 {
 			continue
 		}
-		asInput, ok1 := price(m.Model, m.CacheReadTokens, 0, 0, 0, 0)
-		asCache, ok2 := price(m.Model, 0, 0, m.CacheReadTokens, 0, 0)
+		asInput, ok1 := price(m.Model, m.CacheReadTokens, 0, 0, 0, 0, now)
+		asCache, ok2 := price(m.Model, 0, 0, m.CacheReadTokens, 0, 0, now)
 		if ok1 && ok2 && asInput > asCache {
 			saved += asInput - asCache
 		}

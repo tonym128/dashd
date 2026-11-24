@@ -197,8 +197,12 @@ func (s *Server) normaliseIngested(sess *model.SessionWrite, uid string) {
 			c.Day = c.Time.Local().Format("2006-01-02")
 		}
 		if s.Pricer != nil {
+			var ts int64
+			if !c.Time.IsZero() {
+				ts = c.Time.Unix()
+			}
 			c.CostUSD, c.Priced = s.Pricer(c.Model, int64(c.InputTokens), int64(c.OutputTokens+c.ReasoningTokens),
-				int64(c.CacheReadTokens), int64(c.CacheWriteTokens), int64(c.CacheWrite1hTokens))
+				int64(c.CacheReadTokens), int64(c.CacheWriteTokens), int64(c.CacheWrite1hTokens), ts)
 		}
 	}
 	for i := range sess.ToolCalls {

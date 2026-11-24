@@ -193,9 +193,7 @@ func run(o options, command string, stdout io.Writer) error {
 	}
 	warnIfFallbackOnly(pricer, o.models, log)
 	log.Debug("pricing configured", "models", o.models)
-	priceFn := func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
-		return pricer.CostCall(m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
-	}
+	priceFn := priceAt(pricer)
 
 	if command == "reprice" {
 		n, err := st.Reprice(ctx, priceFn)
@@ -455,6 +453,18 @@ func splitList(s string) []string {
 	return out
 }
 
+// priceAt adapts a pricer to the store's and server's price function, which
+// carry the call's time as epoch seconds, 0 when unknown.
+func priceAt(pricer *source.Pricer) func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h, ts int64) (float64, bool) {
+	return func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h, ts int64) (float64, bool) {
+		var at time.Time
+		if ts > 0 {
+			at = time.Unix(ts, 0)
+		}
+		return pricer.CostCallAt(at, m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
+	}
+}
+
 func runModelsRefresher(ctx context.Context, path string, interval time.Duration, pricer *source.Pricer, st *store.Store, log *slog.Logger) {
 	refresh := func() {
 		rctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -470,9 +480,7 @@ func runModelsRefresher(ctx context.Context, path string, interval time.Duration
 		}
 		log.Info("auto-updated models", "path", path, "models", n)
 		if st != nil {
-			repriced, err := st.Reprice(ctx, func(m string, in, out, cacheRead, cacheWrite, cacheWrite1h int64) (float64, bool) {
-				return pricer.CostCall(m, int(in), int(out), int(cacheRead), int(cacheWrite), int(cacheWrite1h))
-			})
+			repriced, err := st.Reprice(ctx, priceAt(pricer))
 			if err != nil {
 				log.Warn("auto-reprice after models update failed", "error", err)
 			} else {
