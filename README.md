@@ -30,7 +30,7 @@ go build -o dashd ./cmd/dashd
 | `scan` | One pass, then exit — for cron or a systemd timer |
 | `push` | Scan local logs and push them, in batches, to a remote `dashd` server |
 | `status` | Show this machine's push state: last success, last error, server version |
-| `reprice` | Recompute every stored cost (and day bucket) from the current price table |
+| `reprice` | Recompute every stored cost (and day bucket) at the price in force when each call was made |
 | `prune` | Delete calls before `-before YYYY-MM-DD`; pruned history is not re-ingested |
 | `backup` | Write a consistent copy of the database to `-out` (safe while serving) |
 | `export` | Write calls as CSV or JSON (`-format`, `-out`, filter flags) |
@@ -63,6 +63,8 @@ go build -o dashd ./cmd/dashd
 | `-redact-paths` | `none` | For `push`: `home`, `basename` or `hash` project paths before sending |
 | `-models` | next to the binary, `~/.local/share/dashd`, `/usr/share/dashd` | OpenRouter price dump |
 | `-models-refresh` | `0` | Auto-update `models.json` on this interval (e.g. `24h`) and reprice |
+| `-backup-every`, `-backup-keep`, `-backup-dir` | off, `7`, beside the database | Rotating automatic backups |
+| `-git` | off | Read commit hashes, times and subjects in the projects agents worked in, for cost per commit; `push` sends them |
 | `-daily-budget`, `-monthly-budget` | none | Budget alerts in the UI and, with `-webhook-url`, by webhook |
 | `-webhook-url`, `-digest-every` | none | Budget alerts and periodic digests to Slack/Discord-style webhooks |
 | `-tags-file` | none | JSON `{ "tag": ["/project/prefix", ...] }` for cost-centre reporting |
@@ -100,7 +102,7 @@ Three details keep incremental scans accurate:
 
 [`models.json`](models.json) (refreshed with `dashd update-models`, or automatically with `-models-refresh 24h`) is the source of truth for model rates, backed by an embedded fallback table ([`internal/source/manual_pricing.json`](internal/source/manual_pricing.json)) and provider overrides ([`internal/source/pricing_overrides.json`](internal/source/pricing_overrides.json)).
 
-Models without a known rate are recorded as **unpriced** rather than `$0.00` so unknown costs are never confused with free usage. Running `dashd reprice` recomputes all stored calls against the current price table.
+Models without a known rate are recorded as **unpriced** rather than `$0.00` so unknown costs are never confused with free usage. Prices are kept as a history: a change applies from the day it is seen, and `dashd reprice` recomputes each call at the price in force when it was made. `dashd reprice -current-prices` applies today's prices to everything, and the System tab sets prices by hand.
 
 A central server prices every pushed call itself, with its own table, and buckets days in its own timezone (`-tz`), so totals do not depend on which laptop sent them.
 

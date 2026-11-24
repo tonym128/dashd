@@ -22,9 +22,6 @@ naming.
 ## Still open
 
 ### UI / UX
-- **In-place filter updates.** Filtering still navigates; scroll position and
-  the active tab are now kept, but a JSON re-render without reload would need
-  the server-rendered cards (burn, stats, insights) to move into the payload.
 - **Machine-vs-machine comparison.** The comparison is period-over-period
   only; the Machines table covers side-by-side totals.
 - **Dynamic inline styles.** Bar widths and chart colours are still `style`
@@ -32,18 +29,16 @@ naming.
   properties set from JS would allow dropping it.
 
 ### Frontend structure
-- **ES modules and browser tests.** `dashboard.js` was split into
-  `dashboard.js`, `app.js` and `session.js`, but they remain classic scripts:
-  the node `vm` harness (`jsdom_test.go`) reads top-level bindings, which
-  modules would hide. A module split needs that harness reworked first;
-  Playwright would add browser coverage but needs browsers in CI.
+- **ES modules.** The scripts remain classic: the node `vm` harness
+  (`jsdom_test.go`) reads top-level bindings, which modules would hide. Layout
+  and interaction are covered by `browser_test.go` (headless Chrome).
 
 ### Agent
 - **On-disk outbound queue.** Unsent batches are re-read from the logs on the
   next pass (cursors only advance after the server accepts a batch), which is
   durable as long as the logs exist. A queue would cover logs rotated while a
   laptop is offline.
-- **Rate-limit (429) signal** from agent logs as an insight.
+- **Rate limits beyond Claude Code.** Only its logs were seen to record them.
 - **macOS Keychain** for the token (today: a 0600 file).
 
 ### Installation
@@ -58,7 +53,3 @@ naming.
 - **Fallback price table.** Record the date `manual_pricing.json` was
   generated and log it with the fallback warning; trim it to an emergency
   floor.
-- **Free and local models** (OpenCode `*-free`, GGUF/local models) are counted
-  as unpriced; a `pricing_overrides.json` entry pricing them at $0 would move
-  them out of the unpriced warning. Paid models currently unpriced on the
-  maintainer's machine include `gemini-3.8-pro` and `claude-fable-5-2`.

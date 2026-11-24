@@ -167,7 +167,9 @@ function refillArray(target, values) {
 
         // Group days by YYYY-MM for monthly totals
         const monthTotals = {};
-        visible.forEach(d => {
+        // Over every day in the view, not just the ones shown: a month row that
+        // sums two weeks reads as the month.
+        (rollupMode === 'daily' ? dailyStats : visible).forEach(d => {
             const month = d.day.slice(0, 7);
             if (!monthTotals[month]) {
                 monthTotals[month] = {cost: 0, models: {}};

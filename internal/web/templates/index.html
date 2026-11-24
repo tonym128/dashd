@@ -632,7 +632,7 @@
       <div class="admin-card">
         <h3>Catalogue</h3>
         {{if .Prices.Enabled}}
-        <p>Last refreshed: {{.Prices.LastSuccess}}. Refreshes every {{.Prices.Every}} (0s is off).</p>
+        <p>Last refreshed: {{.Prices.LastSuccess}}. {{if eq .Prices.Every "0s"}}Automatic refresh is off.{{else}}Refreshes every {{.Prices.Every}}.{{end}}</p>
         {{if .Prices.LastError}}<p class="scan-error">Last refresh failed ({{.Prices.LastAttempt}}): {{.Prices.LastError}}</p>{{end}}
         {{else}}<p>Refresh status is not available.</p>{{end}}
         <p>A price change applies from the day it is seen; earlier calls keep what they cost.</p>
@@ -689,7 +689,7 @@
       </form>
       <div class="admin-card">
         <h3>Backup</h3>
-        <p>Run <code>dashd backup -out dashd.db.bak</code> on the server. It is safe while dashd is running.</p>
+        <p>Run <code>dashd backup -out dashd.db.bak</code> on the server. It is safe while dashd is running. Start the server with <code>-backup-every 24h</code> to keep the last seven automatically.</p>
       </div>
     </div>
   </div>
@@ -699,7 +699,7 @@
     <div class="section-header"><span>Scanner</span></div>
     <table id="scan-table">
       <thead>
-        <tr><th>Source</th><th>Last pass</th><th>Files seen</th><th>Files changed</th><th>Calls added</th><th>Status</th></tr>
+        <tr><th>Source</th><th>Last pass</th><th class="numeric">Files seen</th><th class="numeric">Files changed</th><th class="numeric">Calls added</th><th>Status</th></tr>
       </thead>
       <tbody>
         {{range .Scan}}

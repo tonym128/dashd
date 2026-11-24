@@ -40,6 +40,9 @@ type options struct {
 	machine       string
 	remote        string
 	once          bool
+	backupEvery   time.Duration
+	backupKeep    int
+	backupDir     string
 	git           bool
 	currentPrices bool
 	before        string
@@ -156,6 +159,10 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 		"for 'reprice', forget the recorded price history and apply today's prices to all of it")
 	fs.BoolVar(&o.git, "git", false,
 		"read recent commits (hash, time, subject) in the projects agents worked in, to show what each cost; 'push' sends them to the server")
+	fs.DurationVar(&o.backupEvery, "backup-every", 0,
+		"write a rotating backup of the database on this interval (e.g. 24h); 0 disables")
+	fs.IntVar(&o.backupKeep, "backup-keep", 7, "how many automatic backups to keep")
+	fs.StringVar(&o.backupDir, "backup-dir", "", "where automatic backups go (default: beside the database)")
 	fs.BoolVar(&o.resync, "resync", false, "for 'push', forget local cursors and resend all history")
 	fs.StringVar(&o.redactPaths, "redact-paths", "none",
 		"for 'push', how project and log paths are sent: none, home (strip $HOME), basename, or hash")

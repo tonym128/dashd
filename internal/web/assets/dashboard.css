@@ -43,6 +43,8 @@
     padding: 0;
 }
 
+a { color: var(--accent-blue); }
+
 body {
     font-family: var(--font-sans);
     background: var(--bg-primary);
@@ -1939,3 +1941,7 @@ progress.budget-forecast::-webkit-progress-value { background: var(--accent-yell
 progress.budget-forecast::-moz-progress-bar { background: var(--accent-yellow); }
 progress.budget-over::-webkit-progress-value { background: var(--accent-red); }
 progress.budget-over::-moz-progress-bar { background: var(--accent-red); }
+
+.admin-card label { font-size: 13px; }
+.admin-card input, .admin-card select { font-size: 13px; }
+.empty-state span { font-size: 13px; }

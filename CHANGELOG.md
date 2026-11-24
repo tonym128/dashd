@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-25
+
+The database migrates to schema version 12 on first start (a copy is written
+first); older binaries refuse the migrated database.
+
+### Added
+
+- **Planning tab:** monthly budgets per project, tag, model, machine or program
+  with forecasts, insights and webhook alerts; subscription value (a flat fee
+  against list-price usage); what-if pricing on another model; cost per commit;
+  and rate limits.
+- **Price history.** A change in the catalogue, or a model leaving it, applies
+  from the day it is seen instead of rewriting what past calls cost.
+  `dashd reprice -current-prices` applies today's prices to everything. Prices
+  can be set by hand, and a Prices panel shows refreshes, failures and
+  unpriced models.
+- Spend spikes per project, model and machine raise an insight.
+- `-git` (off by default) reads commit hashes, times and subjects in the projects
+  agents worked in, so commits show what they cost. `push` sends them to the
+  server; `-redact-paths` and `-redact-titles` apply.
+- `-backup-every`, `-backup-keep` and `-backup-dir` keep rotating backups.
+- Rolling date ranges (`?range=30d`). A browser opening the dashboard lands on
+  the range it last used, 30 days at first.
+- Sessions group by project, warnings can be snoozed for a week, and tables have
+  a column chooser.
+
+### Changed
+
+- Filtering updates the page in place. Bars, days, models, providers and machines
+  filter when clicked.
+- Tabs, range and filters share one sticky bar; the spending chart comes first and
+  lifetime totals are one strip. Amounts have thousands separators and a neutral
+  colour; sessions lead with their title.
+- Today is compared with yesterday by the same time. Insights rank by dollars,
+  and small ones are no longer warnings.
+- Pages and assets are gzip-compressed, and assets revalidate with ETags.
+
+### Fixed
+
+- The Apply button was unstyled; secondary buttons were illegible on hover.
+- Breakdown tables leaked onto other tabs, filter pickers hid the active filter,
+  filters overlapped on phones, hidden controls showed, numbers were misaligned
+  and the Models table was cut off.
+- "Show all days" did nothing, and weekly and monthly charts had stray rows.
+- Cache savings were overstated for models with long-prompt rates.
+
 ## [0.9.7] - 2026-11-24
 
 ### Added

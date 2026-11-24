@@ -331,6 +331,9 @@ func run(o options, command string, stdout io.Writer) error {
 	if o.modelsRefresh > 0 {
 		go runModelsRefresher(ctx, o.models, o.modelsRefresh, pricer, st, srv.PriceStatus, log)
 	}
+	if o.backupEvery > 0 {
+		go runBackups(ctx, st, o.db, o.backupDir, o.backupEvery, o.backupKeep, log)
+	}
 	if o.webhookURL != "" {
 		go web.RunNotifier(ctx, st, web.NotifierConfig{
 			WebhookURL:    o.webhookURL,
