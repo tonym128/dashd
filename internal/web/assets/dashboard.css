@@ -1915,3 +1915,6 @@ a.model-tag:hover { text-decoration: underline; }
 .daily-bar .date a:hover { color: var(--accent-blue); text-decoration: underline; }
 a.bar-segment { display: block; }
 #sessions-group[aria-pressed="true"] { border-color: var(--accent-blue); color: var(--accent-blue); }
+
+body.is-loading { cursor: progress; }
+body.is-loading main { opacity: 0.6; transition: opacity 0.15s 0.1s; }

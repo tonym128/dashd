@@ -102,7 +102,68 @@
             requestAnimationFrame(() => window.scrollTo(0, y));
         }
     } catch (_) {}
+    // ------------------------------------------------------------ filter in place
+    // Another filter is the same page with other data, so it is fetched and
+    // swapped in: scroll, tab, open rows and the scripts' state stay put.
+    // Anything unexpected falls back to an ordinary navigation.
+    let navigation = 0;
+    async function navigate(url, push) {
+        const target = new URL(url, location.href);
+        const id = ++navigation;
+        document.body.classList.add('is-loading');
+        try {
+            const resp = await fetch(target.pathname + target.search, { headers: { Accept: 'text/html' }, credentials: 'same-origin' });
+            if (id !== navigation) return;
+            if (!resp.ok || new URL(resp.url).pathname !== '/') throw new Error('unexpected response');
+            const next = new DOMParser().parseFromString(await resp.text(), 'text/html');
+            if (id !== navigation) return;
+            const script = next.getElementById('payload');
+            const fresh = JSON.parse(script.textContent.replace(/^\s*window\.dashboardData = /, '').replace(/;\s*$/, ''));
+            if (push) history.pushState(null, '', new URL(resp.url).search ? '/' + new URL(resp.url).search : '/');
+            Object.keys(dashboardData).forEach(k => delete dashboardData[k]);
+            Object.assign(dashboardData, fresh);
+            document.querySelectorAll('[data-swap]').forEach(el => {
+                const from = next.querySelector('[data-swap="' + el.dataset.swap + '"]');
+                el.innerHTML = from ? from.innerHTML : '';
+            });
+            if (window.dashdMarkFilters) window.dashdMarkFilters();
+            dashdRefreshers.forEach(fn => fn());
+            if (window.dashdHideInsights) window.dashdHideInsights();
+            const q = new URLSearchParams(location.search);
+            if (q.get('view') && window.dashdSetView) window.dashdSetView(q.get('view'));
+            if (q.get('sub') && window.dashdSetBreakdown) window.dashdSetBreakdown(q.get('sub'));
+            measureTopbar();
+        } catch (_) {
+            if (id === navigation) location.href = target.href;
+        } finally {
+            if (id === navigation) document.body.classList.remove('is-loading');
+        }
+    }
+    window.dashdNavigate = url => navigate(url, true);
+    if (window.addEventListener) window.addEventListener('popstate', () => navigate(location.href, false));
+    document.addEventListener('click', e => {
+        if (e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        const href = a && a.getAttribute('href');
+        // ?sort= is read once at load, so those links still load the page.
+        if (!href || !href.startsWith('/?') || a.target || a.hasAttribute('download') || /[?&]sort=/.test(href)) return;
+        e.preventDefault();
+        navigate(href, true);
+    });
+
     const form = document.getElementById('filter-form');
+    if (form && typeof FormData === 'function') {
+        form.addEventListener('submit', e => {
+            e.preventDefault();
+            const q = new URLSearchParams();
+            new FormData(form).forEach((v, k) => { if (v) q.append(k, v); });
+            // Dates chosen by hand replace the preset.
+            if (q.get('date_from') || q.get('date_to')) q.delete('range');
+            const here = new URLSearchParams(location.search);
+            ['aw', 'am', 'as'].forEach(k => { if (here.get(k)) q.set(k, here.get(k)); });
+            navigate('/?' + (q.toString() || 'range=all'), true);
+        });
+    }
     document.querySelectorAll('[data-auto-apply]').forEach(el => {
         el.addEventListener('change', () => {
             const range = document.getElementById('filter-range');
@@ -118,14 +179,6 @@
     }
     measureTopbar();
     if (window.addEventListener) window.addEventListener('resize', measureTopbar);
-    if (form) form.addEventListener('submit', rememberScroll);
-    document.addEventListener('click', e => {
-        const t = e.target;
-        if (t && t.closest && (t.closest('[data-date-preset]') || t.closest('[data-remove-filter-key]'))) {
-            rememberScroll();
-        }
-    }, true);
-
     // ------------------------------------------------------------ saved views
     const savedSel = document.getElementById('saved-views');
     const saveBtn = document.getElementById('save-view');
@@ -148,8 +201,7 @@
             const views = loadViews();
             if (!savedSel.value) { if (delBtn) delBtn.hidden = true; return; }
             const qs = views[savedSel.value] || '';
-            rememberScroll();
-            location.href = qs ? '/?' + qs : '/';
+            navigate(qs ? '/?' + qs : '/?range=all', true);
         });
     }
     if (saveBtn) {
@@ -179,13 +231,15 @@
     // ------------------------------------------------------------ export links
     // Every Export link carries the page's current filter, so a download is the
     // whole filtered set, not just the rows on screen.
-    document.querySelectorAll('[data-export]').forEach(a => {
+    function paintExports() { document.querySelectorAll('[data-export]').forEach(a => {
         const params = filterQuery();
         params.set('kind', a.dataset.export);
         params.set('format', 'csv');
         a.setAttribute('href', '/api/export?' + params.toString());
         a.setAttribute('download', '');
-    });
+    }); }
+    paintExports();
+    dashdRefreshers.push(paintExports);
 
     // ------------------------------------------------------------ column chooser
     // Columns are hidden by rule rather than per cell, so a re-render keeps them
@@ -248,9 +302,12 @@
     if (tz && data.timezone) tz.textContent = data.timezone;
 
     // ------------------------------------------------------------ comparison
+    function paintComparison() {
     const cmpEl = document.getElementById('comparison-content');
     const cmpBadge = document.getElementById('comparison-badge');
-    const cmp = data.comparison;
+    const cmp = dashboardData.comparison;
+    const cmpSection = document.getElementById('comparison-section');
+    if (cmpSection) cmpSection.hidden = false;
     if (cmpEl && cmp && cmp.current && cmp.prior) {
         const delta = (cur, prior) => {
             if (!prior) return cur ? '<span class="burn-flat">new</span>' : '<span class="burn-flat">–</span>';
@@ -286,11 +343,15 @@
         const section = document.getElementById('comparison-section');
         if (section) section.hidden = true;
     }
+    }
+    paintComparison();
+    dashdRefreshers.push(paintComparison);
 
     // ------------------------------------------------------------ tags
     const tagsBody = document.getElementById('tags-tbody');
+    function paintTags() {
     if (tagsBody) {
-        const tags = data.tags || [];
+        const tags = dashboardData.tags || [];
         tagsBody.innerHTML = tags.length ? tags.map(t => {
             const link = t.tag === '(untagged)' ? escapeHtml(t.tag)
                 : `<a href="/?tag=${encodeURIComponent(t.tag)}">${escapeHtml(t.tag)}</a>`;
@@ -299,6 +360,9 @@
                 `<td class="numeric">${money(t.per_session)}</td><td class="numeric">${Number(t.pct || 0).toFixed(1)}%</td></tr>`;
         }).join('') : '<tr><td colspan="7" class="empty-cell">No tagged projects in this view.</td></tr>';
     }
+    }
+    paintTags();
+    dashdRefreshers.push(paintTags);
 
     // ------------------------------------------------------------ shortcuts dialog
     const dialog = document.getElementById('shortcuts-dialog');

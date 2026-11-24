@@ -257,3 +257,41 @@ func TestBrowserSessionsGroupAndSnooze(t *testing.T) {
 		t.Errorf("%+v", got)
 	}
 }
+
+// Filtering must not reload: a value planted on window survives it.
+func TestBrowserFiltersInPlace(t *testing.T) {
+	var got struct {
+		Kept         bool
+		Before       int
+		After        int
+		Url          string
+		Chip         string
+		Picker       string
+		Cost         string
+		Back         int
+		RangeRemoved bool
+		Daily        int
+	}
+	probe(t, browserServer(t), 1440, "/?view=breakdown&range=all", `
+		win.planted = 1;
+		const rows = () => doc.querySelectorAll('#projects-tbody tr.expandable-row').length;
+		const out = { Before: rows() };
+		doc.querySelector('#agent + details input[type=checkbox]').click();
+		doc.querySelector('#filter-form [type=submit]').click();
+		await sleep(900);
+		out.After = rows(); out.Url = win.location.search;
+		out.Chip = doc.getElementById('active-filter-chips').textContent;
+		out.Picker = doc.querySelector('#agent + details summary').textContent;
+		out.Cost = doc.querySelector('.stats-grid .value').textContent;
+		win.history.back(); await sleep(900);
+		out.Back = rows();
+		doc.querySelector('[data-date-preset="7d"]').click(); await sleep(900);
+		out.RangeRemoved = win.location.search.includes('range=7d');
+		out.Daily = doc.querySelectorAll('.daily-bar').length;
+		out.Kept = win.planted === 1;
+		return out;`, &got)
+	if !got.Kept || got.Before != 2 || got.After != 1 || got.Back != 2 || got.Picker != "1 selected" ||
+		!strings.Contains(got.Chip, "claude") || got.Cost != "$24,690.00" || !got.RangeRemoved || got.Daily != 7 {
+		t.Errorf("%+v", got)
+	}
+}

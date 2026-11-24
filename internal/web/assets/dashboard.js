@@ -43,19 +43,33 @@ function formatMoney(value, digits = 2) {
 
 const dashboardData = window.dashboardData || {};
 
-(function() {
-    const dailyStats = dashboardData.dailyStats || [];
+// Filtering swaps the data under a live page: app.js replaces the contents of
+// dashboardData and then calls every refresher registered here.
+const dashdRefreshers = [];
 
-    // Collect all model names ordered by total cost (highest first)
-    const modelTotals = {};
-    dailyStats.forEach(d => {
-        Object.entries(d.models).forEach(([m, c]) => {
-            modelTotals[m] = (modelTotals[m] || 0) + c;
+function refillArray(target, values) {
+    target.length = 0;
+    (values || []).forEach(v => target.push(v));
+}
+
+(function() {
+    let dailyStats = [];
+    let allModels = [];
+    function readDaily() {
+        dailyStats = dashboardData.dailyStats || [];
+        // Collect all model names ordered by total cost (highest first)
+        const modelTotals = {};
+        dailyStats.forEach(d => {
+            Object.entries(d.models).forEach(([m, c]) => {
+                modelTotals[m] = (modelTotals[m] || 0) + c;
+            });
         });
-    });
-    const allModels = Object.keys(modelTotals).sort(
-        (a, b) => modelTotals[b] - modelTotals[a]
-    );
+        allModels = Object.keys(modelTotals).sort(
+            (a, b) => modelTotals[b] - modelTotals[a]
+        );
+    }
+    readDaily();
+    dashdRefreshers.push(() => { readDaily(); render(); });
 
     // Distinct colour palette — one colour per model.
     // We cycle through a fixed set so the same model always
@@ -269,7 +283,7 @@ const dashboardData = window.dashboardData || {};
     render();
 })();
 
-const projects = dashboardData.projects || [];
+const projects = (dashboardData.projects || []).slice();
 
 // Single-quotes a value for sh.
 //
@@ -950,7 +964,7 @@ function updateSortIcons(tableId, sortState) {
 }
 
 // ── Providers table sorting ───────────────────────────────────────────
-const providers = dashboardData.providers || [];
+const providers = (dashboardData.providers || []).slice();
 let providerSort = { field: 'cost', asc: false };
 
 function renderProviders() {
@@ -993,15 +1007,18 @@ function renderProviders() {
 }
 
 // ── Models table sorting ──────────────────────────────────────────────
-const models = dashboardData.models || [];
+const models = (dashboardData.models || []).slice();
 let modelSort = { field: 'cost', asc: false };
 
 const modelToProvider = {};
-(dashboardData.providers || []).forEach(p => {
-    (p.models || []).forEach(m => {
-        modelToProvider[m] = p.name;
+function indexProviders() {
+    (dashboardData.providers || []).forEach(p => {
+        (p.models || []).forEach(m => {
+            modelToProvider[m] = p.name;
+        });
     });
-});
+}
+indexProviders();
 
 function renderModels() {
     const tbody = document.getElementById('models-tbody');
@@ -1047,7 +1064,7 @@ function renderModels() {
 }
 
 // ── Tools table sorting ───────────────────────────────────────────────
-const tools = dashboardData.tools || [];
+const tools = (dashboardData.tools || []).slice();
 let toolSort = { field: 'time', asc: false };
 
 function renderTools() {
@@ -1087,6 +1104,12 @@ function renderTools() {
     }).join('');
 }
 
+// Go to another filter: in place when app.js is there to do it.
+function dashdGo(url) {
+    if (typeof window !== 'undefined' && typeof window.dashdNavigate === 'function') window.dashdNavigate(url);
+    else location.href = url;
+}
+
 // Setup
 setupDelegatedActions();
 setupSessionsToolbar();
@@ -1107,6 +1130,20 @@ setupSorting('tools-table', toolSort, renderTools);
         sessionsSort.asc = q.get('asc') === '1';
     }
 })();
+
+dashdRefreshers.push(() => {
+    refillArray(projects, dashboardData.projects);
+    refillArray(providers, dashboardData.providers);
+    refillArray(models, dashboardData.models);
+    refillArray(tools, dashboardData.tools);
+    indexProviders();
+    sessionsPage = 0;
+    renderProjects();
+    renderProviders();
+    renderModels();
+    renderTools();
+    loadSessions();
+});
 
 // Initial render
 renderProjects();
@@ -1533,6 +1570,7 @@ updateSortIcons('tools-table', toolSort);
 
     readControlState();
     load();
+    dashdRefreshers.push(load);
 })();
 
 // ── UI Shell: views, theme, filter drawer, presets, chips, shortcuts ──
@@ -1625,6 +1663,7 @@ updateSortIcons('tools-table', toolSort);
         } catch (_) {}
     }
     setActiveView(initialView);
+    window.dashdSetView = setActiveView;
 
     if (viewTabsEl && viewTabsEl.addEventListener) {
         viewTabsEl.addEventListener('click', event => {
@@ -1685,6 +1724,7 @@ updateSortIcons('tools-table', toolSort);
     } catch (_) {}
     if (subParam && validBreakdowns.has(subParam)) initialBreakdown = subParam;
     setActiveBreakdown(initialBreakdown);
+    window.dashdSetBreakdown = setActiveBreakdown;
     if (breakdownTabsEl && breakdownTabsEl.addEventListener) {
         breakdownTabsEl.addEventListener('click', event => {
             const tab = event.target.closest('[data-breakdown-tab]');
@@ -1705,52 +1745,65 @@ updateSortIcons('tools-table', toolSort);
     // Active filter chips + badge
     const chipsEl = document.getElementById('active-filter-chips');
     const badgeEl = document.getElementById('filter-badge');
-    const params = typeof location !== 'undefined'
-        ? new URLSearchParams(location.search)
-        : new URLSearchParams();
-    const activeEntries = [];
-    [
-        ['model', 'Model'],
-        ['agent', 'Program'],
-        ['project', 'Project'],
-        ['machine', 'Machine'],
-        ['tag', 'Tag'],
-        ['date_from', 'From'],
-        ['date_to', 'To'],
-    ].forEach(([key, label]) => {
-        params.getAll(key).forEach(val => {
-            if (val) activeEntries.push({ key, label, val });
+    function paintFilterState() {
+        const params = typeof location !== 'undefined'
+            ? new URLSearchParams(location.search)
+            : new URLSearchParams();
+        const activeEntries = [];
+        [
+            ['model', 'Model'],
+            ['agent', 'Program'],
+            ['project', 'Project'],
+            ['machine', 'Machine'],
+            ['tag', 'Tag'],
+            ['date_from', 'From'],
+            ['date_to', 'To'],
+        ].forEach(([key, label]) => {
+            params.getAll(key).forEach(val => {
+                if (val) activeEntries.push({ key, label, val });
+            });
         });
-    });
-    if (params.get('unpriced') === '1' || params.get('unpriced') === 'true') {
-        activeEntries.push({ key: 'unpriced', label: 'Status', val: 'unpriced' });
-    }
+        if (params.get('unpriced') === '1' || params.get('unpriced') === 'true') {
+            activeEntries.push({ key: 'unpriced', label: 'Status', val: 'unpriced' });
+        }
 
-    if (badgeEl) {
-        badgeEl.textContent = String(activeEntries.length);
-        badgeEl.hidden = activeEntries.length === 0;
-    }
+        if (badgeEl) {
+            badgeEl.textContent = String(activeEntries.length);
+            badgeEl.hidden = activeEntries.length === 0;
+        }
 
-    if (chipsEl && activeEntries.length > 0) {
-        chipsEl.innerHTML = activeEntries.map(e =>
-            `<span class="filter-chip">${escapeHtml(e.label)}: <strong>${escapeHtml(e.val)}</strong>` +
-            `<button type="button" data-remove-filter-key="${escapeHtml(e.key)}" data-remove-filter-val="${escapeHtml(e.val)}" aria-label="Remove ${escapeHtml(e.label)} filter">&times;</button></span>`
-        ).join('') + '<a href="/" class="clear-link">Clear all</a>';
+        if (chipsEl) {
+            chipsEl.innerHTML = !activeEntries.length ? '' : activeEntries.map(e =>
+                `<span class="filter-chip">${escapeHtml(e.label)}: <strong>${escapeHtml(e.val)}</strong>` +
+                `<button type="button" data-remove-filter-key="${escapeHtml(e.key)}" data-remove-filter-val="${escapeHtml(e.val)}" aria-label="Remove ${escapeHtml(e.label)} filter">&times;</button></span>`
+            ).join('') + '<a href="/?range=all" class="clear-link">Clear all</a>';
 
-        if (chipsEl.addEventListener) {
-            chipsEl.addEventListener('click', event => {
-                const btn = event.target.closest('[data-remove-filter-key]');
-                if (!btn) return;
-                const key = btn.dataset.removeFilterKey;
-                const val = btn.dataset.removeFilterVal;
-                const next = new URLSearchParams(location.search);
-                const kept = next.getAll(key).filter(v => v !== val);
-                next.delete(key);
-                kept.forEach(v => next.append(key, v));
-                const qs = next.toString();
-                location.href = qs ? '/?' + qs : '/';
+        }
+        const rangeEl = document.getElementById('filter-range');
+        if (rangeEl) rangeEl.value = params.get('range') || '';
+        const hasDates = !!(params.get('date_from') || params.get('date_to'));
+        const currentRange = hasDates ? '' : (params.get('range') || 'all');
+        if (document.querySelectorAll) {
+            document.querySelectorAll('[data-date-preset]').forEach(btn => {
+                btn.classList.toggle('is-active', btn.dataset.datePreset === currentRange);
             });
         }
+    }
+    paintFilterState();
+    dashdRefreshers.push(paintFilterState);
+    if (chipsEl && chipsEl.addEventListener) {
+        chipsEl.addEventListener('click', event => {
+            const btn = event.target.closest('[data-remove-filter-key]');
+            if (!btn) return;
+            const key = btn.dataset.removeFilterKey;
+            const val = btn.dataset.removeFilterVal;
+            const next = new URLSearchParams(location.search);
+            const kept = next.getAll(key).filter(v => v !== val);
+            next.delete(key);
+            kept.forEach(v => next.append(key, v));
+            const qs = next.toString();
+            dashdGo(qs ? '/?' + qs : '/?range=all');
+        });
     }
 
     // Quick date presets
@@ -1759,11 +1812,8 @@ updateSortIcons('tools-table', toolSort);
     const filterForm = document.getElementById('filter-form');
     if (document.querySelectorAll) {
         const rangeEl = document.getElementById('filter-range');
-        const hasDates = !!(params.get('date_from') || params.get('date_to'));
-        const currentRange = hasDates ? '' : (params.get('range') || 'all');
         document.querySelectorAll('[data-date-preset]').forEach(btn => {
             const p = btn.dataset.datePreset;
-            btn.classList.toggle('is-active', p === currentRange);
             btn.addEventListener('click', () => {
                 if (!dateFromEl || !dateToEl || !filterForm || !rangeEl) return;
                 dateFromEl.value = '';
@@ -1808,7 +1858,7 @@ updateSortIcons('tools-table', toolSort);
     }
 
     // Machines breakdown table
-    const machines = dashboardData.machines || [];
+    const machines = (dashboardData.machines || []).slice();
     const machineSort = { field: 'cost', asc: false };
     function renderMachines() {
         const tbody = document.getElementById('machines-tbody');
@@ -1841,10 +1891,14 @@ updateSortIcons('tools-table', toolSort);
     if (document.getElementById('machines-tbody')) {
         setupSorting('machines-table', machineSort, renderMachines);
         renderMachines();
+        dashdRefreshers.push(() => {
+            refillArray(machines, dashboardData.machines);
+            renderMachines();
+        });
     }
 
     // Subtle /healthz check every 60s while visible to flag new data on Refresh
-    const initialCalls = dashboardData.totalMessages || 0;
+    let initialCalls = null; // the first answer, whatever the filter shows
     const reloadBtn = document.querySelector ? document.querySelector('.topbar [data-reload]') : null;
     if (reloadBtn && typeof fetch === 'function' && typeof setInterval === 'function') {
         setInterval(() => {
@@ -1852,7 +1906,9 @@ updateSortIcons('tools-table', toolSort);
             fetch('/healthz', { cache: 'no-store' })
                 .then(r => r.ok ? r.json() : null)
                 .then(h => {
-                    if (h && typeof h.calls === 'number' && h.calls > initialCalls) {
+                    if (!h || typeof h.calls !== 'number') return;
+                    if (initialCalls === null) initialCalls = h.calls;
+                    if (h.calls > initialCalls) {
                         reloadBtn.textContent = 'Refresh (new data)';
                         reloadBtn.classList.add('has-new-data');
                     }
@@ -1990,6 +2046,11 @@ updateSortIcons('tools-table', toolSort);
             };
             updateSummary();
             details.appendChild(summary);
+            dashdRefreshers.push(() => {
+                details.removeAttribute('open');
+                list.querySelectorAll('input').forEach((cb, i) => { cb.checked = !!opts[i].selected; });
+                updateSummary();
+            });
 
             const menu = document.createElement('div');
             menu.className = 'multi-picker-menu';

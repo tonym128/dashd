@@ -10,7 +10,7 @@ import (
 
 func TestBareVisitLandsOnTheRememberedRange(t *testing.T) {
 	srv, _ := newTestServer(t)
-	for cookie, want := range map[string]string{"": "/?range=30d", "7d": "/?range=7d", "all": "/?range=all", "evil\\": "/?range=30d"} {
+	for cookie, want := range map[string]string{"": "/?range=30d", "7d": "/?range=7d", "all": "/?range=all", "evil": "/?range=30d"} {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("Accept", "text/html")
 		if cookie != "" {

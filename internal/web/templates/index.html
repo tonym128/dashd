@@ -19,7 +19,7 @@
     </div>
       <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Dashboard views">
         <button type="button" class="view-tab is-active" role="tab" aria-selected="true" aria-controls="main-panel" id="tab-overview" data-view-tab="overview">Overview</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-insights" tabindex="-1" data-view-tab="insights">Insights{{if .Insights}} ({{len .Insights}}){{end}}</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-insights" data-swap="tab-insights" tabindex="-1" data-view-tab="insights">Insights{{if .Insights}} ({{len .Insights}}){{end}}</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-sessions" tabindex="-1" data-view-tab="sessions">Sessions</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-breakdown" tabindex="-1" data-view-tab="breakdown">Breakdowns</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-system" tabindex="-1" data-view-tab="system">System</button>
@@ -110,10 +110,8 @@
       {{end}}
       <div class="filter-actions">
         <button type="submit" class="btn btn-primary">Apply</button>
-        <a href="/" class="clear-link">Clear</a>
-        {{if .FilterState.Active}}
-        <span class="filter-active-note">Filtered &mdash; Clear returns to everything.</span>
-        {{end}}
+        <a href="/?range=all" class="clear-link">Clear</a>
+        <span data-swap="filter-note">{{if .FilterState.Active}}<span class="filter-active-note">Filtered &mdash; Clear returns to everything.</span>{{end}}</span>
       </div>
     </form>
   </div>
@@ -171,7 +169,7 @@
   </div>
   {{end}}
 
-  <div class="burn-rate" id="burn-rate" data-view-section="overview">
+  <div class="burn-rate" id="burn-rate" data-swap="burn" data-view-section="overview">
     {{range .Burn}}
     <div class="burn-card">
       <div class="burn-label">{{.Label}}</div>
@@ -181,7 +179,7 @@
     </div>
     {{end}}
   </div>
-  <p class="burn-note" data-view-section="overview">{{.BurnNote}}</p>
+  <p class="burn-note" data-swap="burn-note" data-view-section="overview">{{.BurnNote}}</p>
 
   <div class="section" data-view-section="overview">
     <div class="section-header">
@@ -196,7 +194,7 @@
     <div class="daily-chart" id="daily-chart-content"></div>
   </div>
 
-  <div class="stats-grid" data-view-section="overview">
+  <div class="stats-grid" data-swap="stats" data-view-section="overview">
     {{range .StatCards}}
     <div class="stat-card{{if .Wide}} token-card{{end}}">
       <div class="label">{{.Label}}</div>
@@ -210,8 +208,9 @@
     {{end}}
   </div>
 
+  <div data-view-section="overview" data-swap="top-insights">
   {{if .TopInsights}}
-  <div class="section" data-view-section="overview">
+  <div class="section">
     <div class="section-header">
       <span>Key Insights</span>
       <button type="button" class="btn btn-secondary" data-open-view="insights">All {{len .Insights}} insights &rarr;</button>
@@ -231,6 +230,7 @@
     </div>
   </div>
   {{end}}
+  </div>
 
   <div class="section" data-view-section="overview" id="comparison-section">
     <div class="section-header">
@@ -240,7 +240,7 @@
     <div class="comparison" id="comparison-content"></div>
   </div>
 
-  <div class="section" data-view-section="insights">
+  <div class="section" data-view-section="insights" data-swap="insights">
     <div class="section-header">
       <span>Usage Insights</span>
       <span class="badge">{{len .Insights}} findings</span>
@@ -619,7 +619,7 @@
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
 
-<script nonce="{{.Nonce}}">window.dashboardData = {{.PayloadJSON}};</script>
+<script nonce="{{.Nonce}}" id="payload">window.dashboardData = {{.PayloadJSON}};</script>
 <script nonce="{{.Nonce}}">window.filterState = {
   models: {{jsonList .FilterState.Models}},
   agents: {{jsonList .FilterState.Agents}},
@@ -631,12 +631,20 @@
   // Prefill the filter form from the query, so a reload or a shared link shows
   // the same view rather than an empty form over filtered data.
   var s = window.filterState;
+  window.dashdMarkFilters = function() {
+  var q = new URLSearchParams(location.search);
+  var split = function(k) { return q.getAll(k).join(',').split(',').map(function(v) { return v.trim(); }); };
+  s = { models: split('model'), agents: split('agent'), projects: split('project'), machines: split('machine') };
+  window.filterState = s;
+  ['models', 'agents', 'projects', 'machines'].forEach(function(k) { s[k] = s[k].filter(Boolean); });
+  fill(q);
+  };
   function mark(select, values) {
     for (var i = 0; i < select.options.length; i++) {
       select.options[i].selected = values.indexOf(select.options[i].value) !== -1;
     }
   }
-  var q = new URLSearchParams(location.search);
+  function fill(q) {
   var m = document.getElementById('model');
   var a = document.getElementById('agent');
   var p = document.getElementById('project');
@@ -647,8 +655,10 @@
   if (mc && s.machines) mark(mc, s.machines);
   var tg = document.getElementById('tag');
   if (tg) mark(tg, q.getAll('tag'));
-  if (q.get('date_from')) document.getElementById('date_from').value = q.get('date_from');
-  if (q.get('date_to')) document.getElementById('date_to').value = q.get('date_to');
+  document.getElementById('date_from').value = q.get('date_from') || '';
+  document.getElementById('date_to').value = q.get('date_to') || '';
+  }
+  fill(new URLSearchParams(location.search));
 })();
 </script>
 <script src="/assets/dashboard.js"></script>

@@ -91,7 +91,7 @@ func TestCSPNonceMatchesTheInlineScripts(t *testing.T) {
 		t.Errorf("no script carries the CSP nonce %q", nonce)
 	}
 	// Every inline script needs it; there are three.
-	if got := strings.Count(body, `<script nonce="`+nonce+`">`); got != 3 {
+	if got := strings.Count(body, `<script nonce="`+nonce+`"`); got != 3 {
 		t.Errorf("%d inline scripts carry the nonce, want 3", got)
 	}
 	if strings.Contains(body, "<script>") {
