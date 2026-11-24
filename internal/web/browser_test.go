@@ -215,13 +215,24 @@ func TestBrowserDailyChartShowAll(t *testing.T) {
 }
 
 func TestBrowserTablesFitAndNumbersAlign(t *testing.T) {
-	var bad []string
-	probe(t, browserServer(t), 1440, "/?view=breakdown", `
+	h := browserServer(t)
+	for _, font := range []string{"default", "wide"} {
+		var bad []string
+		probe(t, h, 1440, "/?view=breakdown", `
+		const FONT = "`+font+`";
+		if (FONT === "wide") {
+		  const st = doc.createElement("style"); st.textContent = "body, body * { letter-spacing: 0.12em; }"; doc.head.appendChild(st);
+		  win.dispatchEvent(new win.Event("resize")); await sleep(200);
+		}
 		const out = [];
 		doc.querySelectorAll('.section table').forEach(t => {
 		  if (!t.offsetParent) return;
 		  const box = t.closest('.section');
-		  if (t.scrollWidth > box.clientWidth + 1) out.push(t.id + ' is clipped');
+		  if (t.scrollWidth > box.clientWidth + 1) {
+		    const ox = win.getComputedStyle(box).overflowX;
+		    if (ox !== 'auto' && ox !== 'scroll') out.push(t.id + ' spills out of its card');
+		    if (FONT === 'default') out.push(t.id + ' does not fit: ' + t.scrollWidth + ' > ' + box.clientWidth);
+		  }
 		  const wrapped = [...t.querySelectorAll('tbody .model-tag')].some(e => e.getClientRects().length > 1 || e.offsetHeight > 30);
 		  if (wrapped) out.push(t.id + ' wraps its names');
 		  const heads = [...t.querySelectorAll('thead th')];
@@ -231,8 +242,9 @@ func TestBrowserTablesFitAndNumbersAlign(t *testing.T) {
 		  });
 		});
 		return out;`, &bad)
-	if len(bad) > 0 {
-		t.Errorf("%q", bad)
+		if len(bad) > 0 {
+			t.Errorf("%s font: %q", font, bad)
+		}
 	}
 }
 

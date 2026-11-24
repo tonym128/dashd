@@ -179,6 +179,18 @@
     }
     measureTopbar();
     if (window.addEventListener) window.addEventListener('resize', measureTopbar);
+    // Tables that do not fit scroll inside their card rather than spill out.
+    function measureTables() {
+        document.querySelectorAll('.section > table').forEach(t => {
+            const box = t.parentNode;
+            if (!t.offsetWidth || !box.classList) return;
+            box.classList.toggle('is-wide', t.offsetWidth > box.clientWidth + 1);
+        });
+    }
+    measureTables();
+    if (window.addEventListener) window.addEventListener('resize', measureTables);
+    document.addEventListener('click', () => setTimeout(measureTables, 0));
+    dashdRefreshers.push(() => setTimeout(measureTables, 0));
     // ------------------------------------------------------------ saved views
     const savedSel = document.getElementById('saved-views');
     const saveBtn = document.getElementById('save-view');
