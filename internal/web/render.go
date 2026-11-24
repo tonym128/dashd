@@ -304,7 +304,7 @@ func toolsJSON(tools []store.ToolStat, totalSeconds float64) []map[string]any {
 	return out
 }
 
-func sessionsJSON(sessions []store.SessionRow) []map[string]any {
+func sessionsJSON(sessions []store.SessionRow, models map[string][]string) []map[string]any {
 	out := make([]map[string]any, 0, len(sessions))
 	for _, s := range sessions {
 		out = append(out, map[string]any{
@@ -315,6 +315,7 @@ func sessionsJSON(sessions []store.SessionRow) []map[string]any {
 			"machine":            s.Machine,
 			"path":               s.Path,
 			"title":              s.Title,
+			"models":             models[s.UID],
 			"messages":           s.Calls,
 			"tokens":             s.TotalTokens,
 			"input_tokens":       s.InputTokens,

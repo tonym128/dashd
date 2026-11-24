@@ -235,3 +235,25 @@ func TestBrowserTablesFitAndNumbersAlign(t *testing.T) {
 		t.Errorf("%q", bad)
 	}
 }
+
+func TestBrowserSessionsGroupAndSnooze(t *testing.T) {
+	var got struct {
+		Titles, Groups, Opened, Closed int
+		Snoozed                        bool
+	}
+	probe(t, browserServer(t), 1440, "/?view=sessions&range=all", `
+		const out = { Titles: doc.querySelectorAll('.session-name').length };
+		doc.getElementById('sessions-group').click();
+		const row = doc.querySelector('[data-group-project]');
+		out.Groups = doc.querySelectorAll('[data-group-project]').length;
+		row.click(); await sleep(500);
+		out.Opened = doc.querySelectorAll('.session-name').length;
+		row.click();
+		out.Closed = doc.querySelectorAll('.session-name').length;
+		const warn = doc.querySelector('[data-snooze-insight]');
+		if (warn) { warn.click(); out.Snoozed = warn.closest('[data-insight-id]').classList.contains('is-hidden'); } else out.Snoozed = true;
+		return out;`, &got)
+	if got.Titles != 2 || got.Groups != 2 || got.Opened != 1 || got.Closed != 0 || !got.Snoozed {
+		t.Errorf("%+v", got)
+	}
+}

@@ -48,7 +48,7 @@ var columnLayout = []tableSpec{
 		table: "sessions-table", tbody: "sessions-tbody", renderer: "renderSessions",
 		columns: "SESSIONS_COLUMNS", payload: "/api/sessions",
 		cols: []column{
-			{"Project / Session", "project", "sesssentinel"},
+			{"Session", "project", "sesssentinel"},
 			{"Date", "start", "DATESENTINEL"},
 			{"Duration", "duration", "DURSENTINEL"},
 			{"LLM Time", "llm_time", "LLMSENTINEL"},

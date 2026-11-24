@@ -51,6 +51,7 @@
       <button type="button" class="preset-btn" data-date-preset="7d">7d</button>
       <button type="button" class="preset-btn" data-date-preset="mtd">MTD</button>
       <button type="button" class="preset-btn" data-date-preset="30d">30d</button>
+      <button type="button" class="preset-btn" data-date-preset="90d">90d</button>
       <button type="button" class="preset-btn" data-date-preset="all">All time</button>
       <label class="visually-hidden" for="date_from">Date from</label>
       <input type="date" class="range-date" name="date_from" id="date_from" form="filter-form" data-auto-apply min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}" title="Date from">
@@ -74,6 +75,7 @@
   <h1 class="visually-hidden">Agent costs</h1>
   <div class="filter-bar{{if not .FilterState.Active}} is-collapsed{{end}}" id="filter-panel">
     <form method="get" action="/" id="filter-form">
+      <input type="hidden" name="range" id="filter-range" value="{{.FilterState.Range}}">
       <div class="filter-group">
         <label for="model">Model</label>
         <select name="model" id="model" multiple size="5">
@@ -219,7 +221,7 @@
       <div class="insight-card insight-{{.Severity}}" data-insight-id="{{.ID}}">
         <div class="insight-meta">
           <span class="insight-category">{{.Category}}</span>
-          <span class="insight-sev">{{.Severity}}{{if ne .Severity "warn"}} <button type="button" class="insight-dismiss" data-dismiss-insight="{{.ID}}" aria-label="Dismiss insight" title="Dismiss">&times;</button>{{end}}</span>
+          <span class="insight-sev">{{.Severity}}{{if eq .Severity "warn"}} <button type="button" class="insight-dismiss" data-snooze-insight="{{.ID}}" aria-label="Snooze for 7 days" title="Snooze for 7 days">&#128340;&#xFE0E;</button>{{else}} <button type="button" class="insight-dismiss" data-dismiss-insight="{{.ID}}" aria-label="Dismiss insight" title="Dismiss">&times;</button>{{end}}</span>
         </div>
         <div class="insight-headline">{{.Headline}}</div>
         <p class="insight-detail">{{.Detail}}</p>
@@ -249,7 +251,7 @@
       <div class="insight-card insight-{{.Severity}}" data-insight-id="{{.ID}}">
         <div class="insight-meta">
           <span class="insight-category">{{.Category}}</span>
-          <span class="insight-sev">{{.Severity}}{{if ne .Severity "warn"}} <button type="button" class="insight-dismiss" data-dismiss-insight="{{.ID}}" aria-label="Dismiss insight" title="Dismiss">&times;</button>{{end}}</span>
+          <span class="insight-sev">{{.Severity}}{{if eq .Severity "warn"}} <button type="button" class="insight-dismiss" data-snooze-insight="{{.ID}}" aria-label="Snooze for 7 days" title="Snooze for 7 days">&#128340;&#xFE0E;</button>{{else}} <button type="button" class="insight-dismiss" data-dismiss-insight="{{.ID}}" aria-label="Dismiss insight" title="Dismiss">&times;</button>{{end}}</span>
         </div>
         <div class="insight-headline">{{.Headline}}</div>
         <p class="insight-detail">{{.Detail}}</p>
@@ -344,6 +346,7 @@
              placeholder="Search project, path, title, agent or machine&hellip; (press /)"
              aria-label="Filter sessions">
       <span class="table-count" id="sessions-shown"></span>
+      <button type="button" id="sessions-group" class="btn-ghost" aria-pressed="false" title="Group sessions by project">Group by project</button>
       <div class="pager">
         <a id="export-sessions-csv" class="btn btn-secondary" data-export="sessions" href="/api/export?kind=sessions" title="Download every session matching the filters as CSV">Export CSV</a>
         <a class="btn btn-secondary" data-export="calls" href="/api/export?kind=calls" title="Download every individual call matching the filters as CSV">Export calls</a>
@@ -354,7 +357,7 @@
     <table id="sessions-table">
       <thead>
         <tr>
-          <th data-sort="project">Project / Session <span class="sort-icon">▼</span></th>
+          <th data-sort="project">Session <span class="sort-icon">▼</span></th>
           <th data-sort="start">Date <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="duration">Duration <span class="sort-icon">▼</span></th>
           <th class="numeric" data-sort="llm_time">LLM Time <span class="sort-icon">▼</span></th>

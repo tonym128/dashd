@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/tonym128/dashd/internal/store"
@@ -19,6 +21,9 @@ type Insight struct {
 	Detail      string `json:"detail"`
 	ActionLabel string `json:"action_label,omitempty"`
 	ActionURL   string `json:"action_url,omitempty"`
+	// Impact is the dollars the insight is about, which orders it within its
+	// severity.
+	Impact float64 `json:"impact_usd,omitempty"`
 }
 
 // BuildInsights turns pre-aggregated store signals, totals, and burn windows
@@ -77,18 +82,38 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 
 	// Machines whose push agent reports a failure, or that went quiet, come
 	// first: their data is missing from everything below.
+	var failing []machineStatusView
 	for _, m := range in.Machines {
 		if m.LastError != "" {
-			out = append(out, Insight{
-				ID:          "machine-failing-" + m.Machine,
-				Category:    "Machines & Health",
-				Severity:    "warn",
-				Headline:    fmt.Sprintf("%s is failing to push (%s)", m.Machine, m.LastErrorAgo),
-				Detail:      "Last error: " + m.LastError + ". Its newest sessions are missing from these totals; run `dashd status` on that machine.",
-				ActionLabel: "Open System tab",
-				ActionURL:   withQuery(in.Query, map[string]string{"view": "system"}),
-			})
+			failing = append(failing, m)
 		}
+	}
+	if len(failing) > 1 {
+		names := make([]string, len(failing))
+		for i, m := range failing {
+			names[i] = m.Machine
+		}
+		out = append(out, Insight{
+			ID:          "machines-failing",
+			Category:    "Machines & Health",
+			Severity:    "warn",
+			Headline:    fmt.Sprintf("%d machines are failing to push", len(failing)),
+			Detail:      strings.Join(names, ", ") + ". Their newest sessions are missing from these totals; run `dashd status` on each.",
+			ActionLabel: "Open System tab",
+			ActionURL:   withQuery(in.Query, map[string]string{"view": "system"}),
+		})
+		failing = nil
+	}
+	for _, m := range failing {
+		out = append(out, Insight{
+			ID:          "machine-failing-" + m.Machine,
+			Category:    "Machines & Health",
+			Severity:    "warn",
+			Headline:    fmt.Sprintf("%s is failing to push (%s)", m.Machine, m.LastErrorAgo),
+			Detail:      "Last error: " + m.LastError + ". Its newest sessions are missing from these totals; run `dashd status` on that machine.",
+			ActionLabel: "Open System tab",
+			ActionURL:   withQuery(in.Query, map[string]string{"view": "system"}),
+		})
 	}
 	if totals.Calls == 0 {
 		return out
@@ -99,6 +124,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		if dailyBudget > 0 && b.Label == "Today" && b.Cost > dailyBudget {
 			out = append(out, Insight{
 				ID:       "daily-budget-over",
+				Impact:   b.Cost,
 				Category: "Cost & Burn",
 				Severity: "warn",
 				Headline: fmt.Sprintf("Today's spend ($%.2f) exceeds your $%.2f daily budget", b.Cost, dailyBudget),
@@ -108,6 +134,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		if monthlyBudget > 0 && b.Label == "Month to date" && b.Cost > monthlyBudget {
 			out = append(out, Insight{
 				ID:       "monthly-budget-over",
+				Impact:   b.Cost,
 				Category: "Cost & Burn",
 				Severity: "warn",
 				Headline: fmt.Sprintf("Month-to-date spend ($%.2f) exceeds your $%.2f monthly budget", b.Cost, monthlyBudget),
@@ -124,6 +151,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		if !overNow {
 			out = append(out, Insight{
 				ID:       "monthly-forecast-over",
+				Impact:   in.Forecast.Projected,
 				Category: "Cost & Burn",
 				Severity: "warn",
 				Headline: fmt.Sprintf("This month is on track for $%.2f, over your $%.2f budget", in.Forecast.Projected, monthlyBudget),
@@ -139,13 +167,17 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 	// 1. Unpriced calls warning (highest priority data-quality signal).
 	if totals.UnpricedCalls > 0 {
 		top := ""
+		unpricedSeverity := "warn"
+		if float64(totals.UnpricedCalls) < 0.01*float64(totals.Calls) {
+			unpricedSeverity = "tip"
+		}
 		if len(sig.Unpriced) > 0 {
 			top = fmt.Sprintf(" Top unpriced: %s (%d calls).", sig.Unpriced[0].Model, sig.Unpriced[0].Calls)
 		}
 		out = append(out, Insight{
 			ID:          "unpriced-calls",
 			Category:    "Data Health",
-			Severity:    "warn",
+			Severity:    unpricedSeverity,
 			Headline:    fmt.Sprintf("%s unpriced calls are excluded from cost totals", groupInt64(int64(totals.UnpricedCalls))),
 			Detail:      "These calls count tokens but show $0.00 until a rate is known." + top + " Run `dashd update-models` and `dashd reprice`.",
 			ActionLabel: "Show unpriced calls",
@@ -171,6 +203,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 			}
 			out = append(out, Insight{
 				ID:          "burn-pace",
+				Impact:      b.Cost,
 				Category:    "Cost & Burn",
 				Severity:    sev,
 				Headline:    fmt.Sprintf("7-day pace is $%.2f/day (~$%.0f/30d)", dailyAvg, projMonth),
@@ -196,6 +229,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		}
 		out = append(out, Insight{
 			ID:          "session-outlier",
+			Impact:      sig.Top3SessionsCost,
 			Category:    "Cost & Burn",
 			Severity:    "info",
 			Headline:    fmt.Sprintf("Top 3 sessions account for %.0f%% of total spend ($%.2f)", top3Pct, sig.Top3SessionsCost),
@@ -209,6 +243,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 	if sig.HighChurnSessions > 0 {
 		out = append(out, Insight{
 			ID:          "retry-loops",
+			Impact:      sig.HighChurnCost,
 			Category:    "Tools & Loops",
 			Severity:    "warn",
 			Headline:    fmt.Sprintf("%d high-churn session(s) with ≥20%% tool error rate", sig.HighChurnSessions),
@@ -222,11 +257,13 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 	if sig.ErrorToolName != "" && sig.ErrorToolCalls > 0 {
 		errPct := float64(sig.ErrorToolErrors) / float64(sig.ErrorToolCalls) * 100
 		sev := "tip"
-		if errPct >= 15 {
+		// A handful of failures worth pocket change is not a warning.
+		if errPct >= 15 && sig.ErrorToolCost >= 5 {
 			sev = "warn"
 		}
 		out = append(out, Insight{
 			ID:          "tool-errors",
+			Impact:      sig.ErrorToolCost,
 			Category:    "Tools & Loops",
 			Severity:    sev,
 			Headline:    fmt.Sprintf("%s failed %.1f%% of the time (%d/%d calls)", sig.ErrorToolName, errPct, sig.ErrorToolErrors, sig.ErrorToolCalls),
@@ -243,6 +280,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		hitPct := float64(totals.CacheReadTokens) / float64(cacheDenom) * 100
 		out = append(out, Insight{
 			ID:       "cache-savings",
+			Impact:   in.CacheSavings,
 			Category: "Caching",
 			Severity: "info",
 			Headline: fmt.Sprintf("Prompt caching saved about $%.2f (%.1f%% hit rate)", in.CacheSavings, hitPct),
@@ -257,6 +295,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		}
 		out = append(out, Insight{
 			ID:          "low-cache-project",
+			Impact:      sig.LowCacheProjectCost,
 			Category:    "Caching",
 			Severity:    "tip",
 			Headline:    fmt.Sprintf("Low cache hit rate (%.1f%%) in %s", sig.LowCacheProjectHit, projName),
@@ -270,6 +309,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 	if sig.LongPromptCalls > 0 {
 		out = append(out, Insight{
 			ID:          "long-prompt-tier",
+			Impact:      sig.LongPromptCost,
 			Category:    "Model Efficiency",
 			Severity:    "tip",
 			Headline:    fmt.Sprintf("%s calls crossed 200K+ context tokens ($%.2f)", groupInt64(int64(sig.LongPromptCalls)), sig.LongPromptCost),
@@ -283,6 +323,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 	if sig.TopModelName != "" && sig.TopModelPct >= 45 {
 		out = append(out, Insight{
 			ID:          "top-model",
+			Impact:      sig.TopModelCost,
 			Category:    "Model Efficiency",
 			Severity:    "info",
 			Headline:    fmt.Sprintf("%s drives %.0f%% of total spend ($%.2f)", sig.TopModelName, sig.TopModelPct, sig.TopModelCost),
@@ -330,6 +371,7 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		}
 		out = append(out, Insight{
 			ID:          "multi-machine",
+			Impact:      sig.TopMachineCost,
 			Category:    "Machines & Health",
 			Severity:    "info",
 			Headline:    fmt.Sprintf("%s accounts for %.0f%% of spend across %d machines", sig.TopMachine, sig.TopMachinePct, sig.MachineCount),
@@ -339,6 +381,13 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		})
 	}
 
+	sevRank := map[string]int{"warn": 0, "tip": 1, "info": 2}
+	sort.SliceStable(out, func(i, j int) bool {
+		if a, b := sevRank[out[i].Severity], sevRank[out[j].Severity]; a != b {
+			return a < b
+		}
+		return out[i].Impact > out[j].Impact
+	})
 	for i := range out {
 		out[i].Headline = groupDollars(out[i].Headline)
 		out[i].Detail = groupDollars(out[i].Detail)

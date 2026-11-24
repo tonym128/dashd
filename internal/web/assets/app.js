@@ -104,7 +104,11 @@
     } catch (_) {}
     const form = document.getElementById('filter-form');
     document.querySelectorAll('[data-auto-apply]').forEach(el => {
-        el.addEventListener('change', () => { if (form && form.requestSubmit) form.requestSubmit(); });
+        el.addEventListener('change', () => {
+            const range = document.getElementById('filter-range');
+            if (range) range.value = '';
+            if (form && form.requestSubmit) form.requestSubmit();
+        });
     });
     const topbar = document.querySelector('.topbar');
     function measureTopbar() {

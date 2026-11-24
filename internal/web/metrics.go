@@ -163,6 +163,14 @@ func (s *Server) handleSessionsAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load sessions", http.StatusInternalServerError)
 		return
 	}
+	uids := make([]string, len(rows))
+	for i, row := range rows {
+		uids[i] = row.UID
+	}
+	models, err := s.store.SessionModels(r.Context(), uids)
+	if err != nil {
+		s.log.Warn("session models failed", "error", err)
+	}
 	limit := sq.Limit
 	if limit <= 0 || limit > 1000 {
 		limit = 50
@@ -171,7 +179,7 @@ func (s *Server) handleSessionsAPI(w http.ResponseWriter, r *http.Request) {
 		"total":    total,
 		"limit":    limit,
 		"offset":   max(sq.Offset, 0),
-		"sessions": sessionsJSON(rows),
+		"sessions": sessionsJSON(rows, models),
 	})
 }
 

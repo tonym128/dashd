@@ -200,12 +200,12 @@ const dashboardData = window.dashboardData || {};
                 const mCost = d.models[m] || 0;
                 const mPct = (mCost / maxCost * 100);
                 if (mPct < 0.01) return;
-                stackedSegments += `<div class="bar-segment" style="width:${mPct.toFixed(2)}%;background:${modelColor(m, i)}" title="${escapeHtml(m)}: ${formatMoney(mCost, 4)}"></div>`;
+                stackedSegments += `<a class="bar-segment" href="${filterLink('model', m)}" style="width:${mPct.toFixed(2)}%;background:${modelColor(m, i)}" title="${escapeHtml(m)}: ${formatMoney(mCost, 4)}"></a>`;
             });
 
             html += `
                 <div class="daily-bar">
-                    <span class="date">${d.day}</span>
+                    <span class="date">${rollupMode === 'daily' ? `<a href="${dayLink(d.day)}" title="Show only this day">${escapeHtml(d.day)}</a>` : escapeHtml(d.day)}</span>
                     <div class="bar-wrapper">
                         <div class="bar-container stacked">
                             ${stackedSegments}
@@ -362,9 +362,9 @@ function emptyRow(columns, message) {
             (f.agents && f.agents.length) ||
             (f.projects && f.projects.length) ||
             (f.machines && f.machines.length) ||
-            (typeof location !== 'undefined' && location.search.includes('date_'));
+            (typeof location !== 'undefined' && /date_|range=(?!all)/.test(location.search));
         if (hasFilter) {
-            reset = ' <a href="/" class="clear-link">Reset filters</a>';
+            reset = ' <a href="/?range=all" class="clear-link">Show everything</a>';
         }
     }
     return '<tr><td colspan="' + columns + '" class="empty-row">' +
@@ -397,6 +397,23 @@ function formatCompactNumber(value) {
         }
     }
     return sign + formatFullNumber(abs);
+}
+
+// The current view narrowed to some values of one filter.
+function filterLink(key, values) {
+    const q = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
+    q.delete(key);
+    [].concat(values).forEach(v => q.append(key, v));
+    return escapeHtml('/?' + q.toString());
+}
+
+// The current view narrowed to one calendar day.
+function dayLink(day) {
+    const q = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
+    q.delete('range');
+    q.set('date_from', day);
+    q.set('date_to', day);
+    return escapeHtml('/?' + q.toString());
 }
 
 function displayNameFromPath(path) {
@@ -566,7 +583,7 @@ let sessionsRequest = 0;
 function currentFilterParams() {
     const src = new URLSearchParams((typeof location !== 'undefined' && location.search) || '');
     const out = new URLSearchParams();
-    ['model', 'agent', 'project', 'machine', 'tag', 'unpriced', 'date_from', 'date_to'].forEach(k => {
+    ['model', 'agent', 'project', 'machine', 'tag', 'unpriced', 'range', 'date_from', 'date_to'].forEach(k => {
         src.getAll(k).forEach(v => out.append(k, v));
     });
     return out;
@@ -587,6 +604,11 @@ function sessionsQueryString() {
 async function loadSessions() {
     const tbody = document.getElementById('sessions-tbody');
     if (!tbody || typeof fetch !== 'function') return;
+    if (sessionsGrouped) {
+        sessionsRequest++;
+        renderSessionGroups();
+        return;
+    }
     const id = ++sessionsRequest;
     try {
         const resp = await fetch('/api/sessions?' + sessionsQueryString(), {
@@ -609,6 +631,104 @@ async function loadSessions() {
         return;
     }
     renderSessions();
+}
+
+// Agents record no working directory for some sessions.
+function projectLabel(path) {
+    if (!path || path === 'unknown') return '(no project)';
+    const name = displayNameFromPath(path);
+    return name.length > 40 ? name.slice(0, 37) + '...' : name;
+}
+
+function sessionRowHtml(s) {
+    const sessionUrl = '/session?uid=' + encodeURIComponent(s.uid);
+    const resumePath = String(s.path || '').replace(/\\/g, '/');
+    const resumeCmd = buildResumeCmd(s.agent_cmd, s.cwd, resumePath, s.resume_uid || s.uid);
+    const project = projectLabel(s.cwd);
+    const badge = (text, title) => text ? `<span class="badge" title="${title}">${escapeHtml(text)}</span>` : '';
+    const models = s.models || [];
+    return `
+        <tr>
+            <td class="project-name" title="${escapeHtml(s.cwd)}">
+                <a class="session-name" href="${sessionUrl}">${escapeHtml(s.title || project)}</a>
+                <div class="session-meta">${s.title ? escapeHtml(project) : ''}
+                    ${badge(s.agent_cmd, 'Program')}${badge(models[0], escapeHtml(models.join(', ')))}${models.length > 1 ? badge('+' + (models.length - 1), escapeHtml(models.join(', '))) : ''}${badge(s.machine, 'Machine')}</div>
+            </td>
+            <td class="c-muted">${s.start_display}</td>
+            <td class="c-muted numeric">${s.duration_display}</td>
+            <td class="c-purple numeric">${s.llm_time_display}</td>
+            <td class="c-yellow numeric">${s.tool_time_display || '0s'}</td>
+            <td class="c-blue numeric">${(s.avg_tps || 0).toFixed(1)}</td>
+            <td class="numeric" title="${formatFullNumber(s.messages)}">${formatCompactNumber(s.messages)}</td>
+            <td class="tokens numeric">${tokenCellHtml(s)}</td>
+            <td class="cost numeric">${formatMoney(s.cost)}</td>
+            <td>
+                <button data-copy-resume data-resume-cmd="${escapeHtml(resumeCmd)}" class="icon-btn" title="Copy resume command">Copy</button>
+                ${s.orphaned
+                ? '<span class="model-stat" title="This session\'s log is no longer on disk; its figures are kept">Log gone</span>'
+                : ''}
+                <a href="${sessionUrl}" class="session-link" title="View the stored calls">Open →</a>
+            </td>
+        </tr>
+    `;
+}
+
+// Grouped view: one row per project, whose sessions load when it is opened. The
+// project totals come from the page payload, so they cover every session and
+// not just one page of them.
+let sessionsGrouped = false;
+
+function renderSessionGroups() {
+    const tbody = document.getElementById('sessions-tbody');
+    const query = (document.getElementById('sessions-search')?.value || '').trim().toLowerCase();
+    const rows = projects.filter(p => !query || String(p.name).toLowerCase().includes(query))
+        .sort((a, b) => b.last_activity - a.last_activity);
+    const shownEl = document.getElementById('sessions-shown');
+    if (shownEl) shownEl.textContent = rows.length + ' projects';
+    ['sessions-prev', 'sessions-next'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = true;
+    });
+    tbody.innerHTML = rows.length ? rows.map(p => `
+        <tr class="expandable-row" data-group-project="${escapeHtml(p.name)}" tabindex="0" aria-expanded="false">
+            <td class="project-name" title="${escapeHtml(p.name)}"><span class="expand-icon">▶</span> ${escapeHtml(projectLabel(p.name))} <span class="badge">${formatFullNumber(p.sessions)} sessions</span></td>
+            <td class="c-muted">${p.last_activity_display}</td>
+            <td></td>
+            <td class="c-purple numeric">${p.llm_time_display}</td>
+            <td class="c-yellow numeric">${p.tool_time_display}</td>
+            <td class="c-blue numeric">${(p.avg_tps || 0).toFixed(1)}</td>
+            <td class="numeric">${formatCompactNumber(p.messages)}</td>
+            <td class="tokens numeric">${tokenCellHtml(p)}</td>
+            <td class="cost numeric">${formatMoney(p.cost)}</td>
+            <td></td>
+        </tr>`).join('') : emptyRow(SESSIONS_COLUMNS, 'No projects in this view.');
+}
+
+async function toggleSessionGroup(row) {
+    const open = row.getAttribute('aria-expanded') === 'true';
+    row.setAttribute('aria-expanded', open ? 'false' : 'true');
+    row.classList.toggle('expanded', !open);
+    if (open) {
+        while (row.nextElementSibling && !row.nextElementSibling.dataset.groupProject) row.nextElementSibling.remove();
+        return;
+    }
+    const params = currentFilterParams();
+    params.delete('project');
+    params.append('project', row.dataset.groupProject);
+    params.set('sort', 'last');
+    params.set('limit', '200');
+    try {
+        const resp = await fetch('/api/sessions?' + params.toString(), { headers: { Accept: 'application/json' } });
+        if (!resp.ok) throw new Error('status ' + resp.status);
+        const data = await resp.json();
+        if (row.getAttribute('aria-expanded') !== 'true') return;
+        const more = data.total > data.sessions.length
+            ? `<tr><td colspan="${SESSIONS_COLUMNS}" class="empty-row">Showing the newest ${data.sessions.length} of ${data.total}. <a href="${filterLink('project', row.dataset.groupProject)}">Show only this project</a></td></tr>` : '';
+        row.insertAdjacentHTML('afterend', data.sessions.map(sessionRowHtml).join('') + more);
+    } catch (_) {
+        row.setAttribute('aria-expanded', 'false');
+        if (typeof window.showDashdToast === 'function') window.showDashdToast('Could not load sessions');
+    }
 }
 
 function renderSessions() {
@@ -640,39 +760,7 @@ function renderSessions() {
         return;
     }
 
-    let html = '';
-    sessionsRows.forEach(s => {
-        const sessionUrl = '/session?uid=' + encodeURIComponent(s.uid);
-        const resumePath = String(s.path || '').replace(/\\/g, '/');
-        const resumeCmd = buildResumeCmd(s.agent_cmd, s.cwd, resumePath, s.resume_uid || s.uid);
-        const sessionName = displayNameFromPath(s.cwd);
-        const shortProject = sessionName.length > 40 ? sessionName.slice(0, 37) + '...' : sessionName;
-        const machineBadge = s.machine ? ` <span class="badge" title="Machine">${escapeHtml(s.machine)}</span>` : '';
-        const titleLine = s.title ? `<div class="session-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</div>` : '';
-
-        html += `
-            <tr>
-                <td class="project-name" title="${escapeHtml(s.cwd)}">${escapeHtml(shortProject)}${machineBadge}${titleLine}</td>
-                <td class="c-muted">${s.start_display}</td>
-                <td class="c-muted numeric">${s.duration_display}</td>
-                <td class="c-purple numeric">${s.llm_time_display}</td>
-                <td class="c-yellow numeric">${s.tool_time_display || '0s'}</td>
-                <td class="c-blue numeric">${(s.avg_tps || 0).toFixed(1)}</td>
-                <td class="numeric" title="${formatFullNumber(s.messages)}">${formatCompactNumber(s.messages)}</td>
-                <td class="tokens numeric">${tokenCellHtml(s)}</td>
-                <td class="cost numeric">${formatMoney(s.cost)}</td>
-                <td>
-                    <button data-copy-resume data-resume-cmd="${escapeHtml(resumeCmd)}" class="icon-btn" title="Copy resume command">Copy</button>
-                    ${s.orphaned
-                    ? '<span class="model-stat" title="This session\'s log is no longer on disk; its figures are kept">Log gone</span>'
-                    : ''}
-                    <a href="${sessionUrl}" class="session-link" title="View the stored calls">Open →</a>
-                </td>
-            </tr>
-        `;
-    });
-
-    tbody.innerHTML = html;
+    tbody.innerHTML = sessionsRows.map(sessionRowHtml).join('');
 }
 
 // The button is passed in rather than taken from the event: the delegate below
@@ -742,6 +830,13 @@ function setupSessionsToolbar() {
             }, 200);
         });
     }
+    const group = document.getElementById('sessions-group');
+    group?.addEventListener('click', () => {
+        sessionsGrouped = !sessionsGrouped;
+        group.setAttribute('aria-pressed', sessionsGrouped ? 'true' : 'false');
+        group.textContent = sessionsGrouped ? 'Ungroup' : 'Group by project';
+        loadSessions();
+    });
     prev?.addEventListener('click', () => {
         if (sessionsPage > 0) {
             sessionsPage -= 1;
@@ -773,6 +868,11 @@ function setupDelegatedActions() {
             location.reload();
             return;
         }
+        const groupRow = event.target.closest('[data-group-project]');
+        if (groupRow) {
+            toggleSessionGroup(groupRow);
+            return;
+        }
         const row = event.target.closest('[data-toggle-project]');
         if (row) {
             toggleProjectRow(row.dataset.toggleProject, row);
@@ -782,6 +882,12 @@ function setupDelegatedActions() {
     // able to operate. Enter and Space both activate it; Space must not scroll.
     document.addEventListener('keydown', event => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
+        const groupRow = event.target.closest('[data-group-project]');
+        if (groupRow) {
+            event.preventDefault();
+            toggleSessionGroup(groupRow);
+            return;
+        }
         const row = event.target.closest('[data-toggle-project]');
         if (!row) return;
         event.preventDefault();
@@ -865,7 +971,7 @@ function renderProviders() {
 
         return `
             <tr>
-                <td><span class="model-tag ${escapeHtml(provClass)}" title="${escapeHtml(modelsList)}">${escapeHtml(p.name)}</span></td>
+                <td><a href="${filterLink('model', p.models || [])}" class="model-tag ${escapeHtml(provClass)}" title="${escapeHtml(modelsList)}">${escapeHtml(p.name)}</a></td>
                 <td class="numeric" title="${formatFullNumber(p.messages)}">${formatCompactNumber(p.messages)}</td>
                 <td class="tokens numeric" title="${escapeHtml(breakdown)}">${formatCompactNumber(p.tokens)}</td>
                 <td class="tokens numeric" title="${formatFullNumber(p.input_tokens)}">${formatCompactNumber(p.input_tokens)}</td>
@@ -917,7 +1023,7 @@ function renderModels() {
 
         return `
             <tr>
-                <td><span class="model-tag ${modelClass} ${escapeHtml(provClass)}" title="${escapeHtml(m.name)} · provider: ${escapeHtml(prov)}">${escapeHtml(m.name)}</span></td>
+                <td><a href="${filterLink('model', m.name)}" class="model-tag ${modelClass} ${escapeHtml(provClass)}" title="Filter to ${escapeHtml(m.name)} · provider: ${escapeHtml(prov)}">${escapeHtml(m.name)}</a></td>
                 <td class="numeric" title="${formatFullNumber(m.messages)}">${formatCompactNumber(m.messages)}</td>
                 <td class="tokens numeric" title="${escapeHtml(breakdown)}">${formatCompactNumber(m.tokens)}</td>
                 <td class="tokens numeric" title="${formatFullNumber(m.input_tokens)}">${formatCompactNumber(m.input_tokens)}</td>
@@ -1648,48 +1754,24 @@ updateSortIcons('tools-table', toolSort);
     }
 
     // Quick date presets
-    function isoDate(d) {
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${y}-${m}-${day}`;
-    }
     const dateFromEl = document.getElementById('date_from');
     const dateToEl = document.getElementById('date_to');
     const filterForm = document.getElementById('filter-form');
     if (document.querySelectorAll) {
-        const now = new Date();
-        const todayStr = isoDate(now);
-        const curFrom = params.get('date_from') || '';
-        const curTo = params.get('date_to') || '';
-        const d7 = new Date(now); d7.setDate(d7.getDate() - 6);
-        const d30 = new Date(now); d30.setDate(d30.getDate() - 29);
-        const mtdStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
+        const rangeEl = document.getElementById('filter-range');
+        const hasDates = !!(params.get('date_from') || params.get('date_to'));
+        const currentRange = hasDates ? '' : (params.get('range') || 'all');
         document.querySelectorAll('[data-date-preset]').forEach(btn => {
             const p = btn.dataset.datePreset;
-            const isMatch =
-                (p === 'today' && curFrom === todayStr && curTo === todayStr) ||
-                (p === '7d' && curFrom === isoDate(d7) && curTo === todayStr) ||
-                (p === 'mtd' && curFrom === isoDate(mtdStart) && curTo === todayStr) ||
-                (p === '30d' && curFrom === isoDate(d30) && curTo === todayStr) ||
-                (p === 'all' && !curFrom && !curTo);
-            btn.classList.toggle('is-active', isMatch);
-
+            btn.classList.toggle('is-active', p === currentRange);
             btn.addEventListener('click', () => {
-                if (!dateFromEl || !dateToEl || !filterForm) return;
-                if (p === 'all') {
-                    dateFromEl.value = '';
-                    dateToEl.value = '';
-                } else {
-                    const start = new Date(now);
-                    if (p === '7d') start.setDate(start.getDate() - 6);
-                    if (p === 'mtd') start.setDate(1);
-                    if (p === '30d') start.setDate(start.getDate() - 29);
-                    dateFromEl.value = isoDate(start);
-                    dateToEl.value = todayStr;
-                }
-                filterForm.submit();
+                if (!dateFromEl || !dateToEl || !filterForm || !rangeEl) return;
+                dateFromEl.value = '';
+                dateToEl.value = '';
+                rangeEl.value = p;
+                // Remembered for the next bare visit.
+                document.cookie = 'dashd_range=' + p + ';path=/;max-age=31536000;SameSite=Lax';
+                if (filterForm.requestSubmit) filterForm.requestSubmit(); else filterForm.submit();
             });
         });
     }
@@ -1738,7 +1820,7 @@ updateSortIcons('tools-table', toolSort);
         }
         tbody.innerHTML = sorted.map(m => `
             <tr>
-                <td><span class="badge">${escapeHtml(m.name)}</span></td>
+                <td><a class="badge" href="${filterLink('machine', m.name)}" title="Filter to this machine">${escapeHtml(m.name)}</a></td>
                 <td class="numeric" title="${formatFullNumber(m.sessions)}">${formatCompactNumber(m.sessions)}</td>
                 <td class="numeric" title="${formatFullNumber(m.messages)}">${formatCompactNumber(m.messages)}</td>
                 <td class="numeric tokens" title="${escapeHtml(tokenTitle(m))}">${formatCompactNumber(m.tokens)}</td>
@@ -1850,15 +1932,30 @@ updateSortIcons('tools-table', toolSort);
     try {
         dismissedInsights = JSON.parse(localStorage.getItem('dashd:dismissed-insights') || '[]') || [];
     } catch (_) {}
-    if (document.querySelectorAll) {
+    // Warnings come back: they are snoozed for a week, never dismissed for good.
+    let snoozed = {};
+    try { snoozed = JSON.parse(localStorage.getItem('dashd:snoozed-insights') || '{}') || {}; } catch (_) {}
+    function hideInsights() {
+        if (!document.querySelectorAll) return;
         document.querySelectorAll('[data-insight-id]').forEach(card => {
-            if (dismissedInsights.indexOf(card.dataset.insightId) !== -1) {
+            const id = card.dataset.insightId;
+            if (dismissedInsights.indexOf(id) !== -1 || Number(snoozed[id]) > Date.now()) {
                 card.classList.add('is-hidden');
             }
         });
     }
+    hideInsights();
+    window.dashdHideInsights = hideInsights;
     if (document.addEventListener) {
         document.addEventListener('click', event => {
+            const snooze = event.target.closest('[data-snooze-insight]');
+            if (snooze) {
+                snoozed[snooze.dataset.snoozeInsight] = Date.now() + 7 * 86400e3;
+                try { localStorage.setItem('dashd:snoozed-insights', JSON.stringify(snoozed)); } catch (_) {}
+                hideInsights();
+                if (typeof window.showDashdToast === 'function') window.showDashdToast('Snoozed for 7 days');
+                return;
+            }
             const btn = event.target.closest('[data-dismiss-insight]');
             if (!btn) return;
             const id = btn.dataset.dismissInsight;

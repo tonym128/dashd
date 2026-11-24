@@ -212,6 +212,16 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// A browser opening the bare dashboard lands on its remembered range.
+	if r.URL.RawQuery == "" && acceptsHTML(r) {
+		rng := defaultRange
+		if c, err := r.Cookie(rangeCookie); err == nil && validRange(c.Value) {
+			rng = c.Value
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, "/?range="+rng, http.StatusFound)
+		return
+	}
 	ctx := r.Context()
 	filter, _, err := parseFilter(r.URL.Query())
 	if err != nil {
@@ -334,6 +344,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	var minTS, maxTS int64
 	var signals store.InsightSignals
 	var comparison map[string]any
+	var yesterdayByNow *store.Totals
 
 	// A ?tag= filter expands into the projects the tag covers.
 	s.applyTagFilter(ctx, &filter, query)
@@ -359,6 +370,17 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 			if burnDaily, err = st.Daily(ctx, bf); err != nil {
 				return err
 			}
+		}
+		{
+			at := s.Generated()
+			from, to := localDay(at).AddDate(0, 0, -1), at.AddDate(0, 0, -1)
+			yf := filter
+			yf.DateFrom, yf.DateTo = &from, &to
+			t, err := st.Totals(ctx, yf)
+			if err != nil {
+				return err
+			}
+			yesterdayByNow = &t
 		}
 		if models, err = st.Models(ctx, filter); err != nil {
 			return err
@@ -393,6 +415,10 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 
 	now := s.Generated()
 	burn := burnWindows(burnDaily, now)
+	if yesterdayByNow != nil {
+		// A part day against a whole one always looks like a saving.
+		burn[0].PriorCost, burn[0].PriorLabel = yesterdayByNow.Cost, "yesterday by this time"
+	}
 	fc := monthForecast(burn, now)
 	savings := cacheSavings(models, s.Pricer)
 	machineViews := s.machineStatusViews(ctx, now)
@@ -480,12 +506,12 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		Insights:       insights,
 		TopInsights:    topInsights(insights),
 		AuthEnabled:    s.AuthEnabled,
-		Empty:          totals.Calls == 0 && !filterActive(filter),
+		Empty:          totals.Calls == 0 && maxTS == 0,
 		// Shown whenever a local scan ran and a source needs attention, or when
 		// the database holds no calls at all (fresh install). A serve-only
 		// instance receiving remote pushes has no local scan_status rows and
 		// already has calls, so it should not warn about missing local logs.
-		SourcesNeedAction: (len(views) > 0 && anyNeedsAttention(sources)) || totals.Calls == 0,
+		SourcesNeedAction: (len(views) > 0 && anyNeedsAttention(sources)) || (totals.Calls == 0 && maxTS == 0),
 	}, nil
 }
 
@@ -666,6 +692,7 @@ type filterState struct {
 	UnpricedOnly bool
 	DateFrom     string
 	DateTo       string
+	Range        string
 	Active       bool
 }
 
@@ -703,6 +730,16 @@ func parseFilter(q url.Values) (store.Filter, filterState, error) {
 		UnpricedOnly: state.UnpricedOnly,
 	}
 
+	// A rolling range stands in for dates it would otherwise go stale as, so a
+	// bookmark or saved view of "30d" still means 30 days next week. Explicit
+	// dates win.
+	if state.DateFrom == "" && state.DateTo == "" {
+		if from, to, ok := rangeDates(q.Get("range"), time.Now()); ok {
+			filter.DateFrom, filter.DateTo = &from, &to
+			state.Range = q.Get("range")
+		}
+	}
+
 	// A date is interpreted in the reader's own timezone, and a "to" date
 	// covers the whole of that day rather than stopping at midnight.
 	if state.DateFrom != "" {
@@ -721,6 +758,39 @@ func parseFilter(q url.Values) (store.Filter, filterState, error) {
 		filter.DateTo = &end
 	}
 	return filter, state, nil
+}
+
+// defaultRange is the date range of a bare "/" for a browser that has not
+// chosen one. All time is a figure nobody acts on.
+const defaultRange = "30d"
+
+// rangeCookie remembers the last preset a browser picked.
+const rangeCookie = "dashd_range"
+
+func validRange(name string) bool {
+	_, _, ok := rangeDates(name, time.Now())
+	return ok || name == "all"
+}
+
+// rangeDates resolves a rolling range to the local days it covers today.
+func rangeDates(name string, now time.Time) (from, to time.Time, ok bool) {
+	today := localDay(now)
+	to = today.AddDate(0, 0, 1).Add(-time.Second)
+	switch name {
+	case "today":
+		from = today
+	case "7d":
+		from = today.AddDate(0, 0, -6)
+	case "30d":
+		from = today.AddDate(0, 0, -29)
+	case "90d":
+		from = today.AddDate(0, 0, -89)
+	case "mtd":
+		from = today.AddDate(0, 0, 1-today.Day())
+	default:
+		return time.Time{}, time.Time{}, false
+	}
+	return from, to, true
 }
 
 // parseFilterState re-reads the query for the template, which needs the raw

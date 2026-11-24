@@ -1896,3 +1896,22 @@ td > .model-tag {
     text-overflow: ellipsis;
     vertical-align: middle;
 }
+
+/* Sessions */
+.session-name { color: var(--accent-blue); text-decoration: none; font-family: var(--font-sans); font-weight: 500; }
+.session-name:hover { text-decoration: underline; }
+#sessions-table td.project-name { max-width: 420px; }
+.session-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-meta { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 3px; font: 12px var(--font-sans); color: var(--text-secondary); }
+td .badge, a.badge {
+    background: var(--bg-tertiary); color: var(--text-secondary); border-radius: 10px;
+    padding: 1px 8px; font: 11px var(--font-sans); text-decoration: none;
+    max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+a.badge:hover { color: var(--accent-blue); }
+a.model-tag { text-decoration: none; }
+a.model-tag:hover { text-decoration: underline; }
+.daily-bar .date a { color: inherit; text-decoration: none; }
+.daily-bar .date a:hover { color: var(--accent-blue); text-decoration: underline; }
+a.bar-segment { display: block; }
+#sessions-group[aria-pressed="true"] { border-color: var(--accent-blue); color: var(--accent-blue); }

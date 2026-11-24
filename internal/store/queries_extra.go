@@ -86,6 +86,34 @@ func (s *Store) SessionsPage(ctx context.Context, f Filter, q SessionQuery) ([]S
 	return out, total, rows.Err()
 }
 
+// SessionModels names the models each session used, dearest first.
+func (s *Store) SessionModels(ctx context.Context, uids []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(uids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(uids))
+	for i, u := range uids {
+		args[i] = u
+	}
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT session_uid, model FROM call
+		WHERE session_uid IN (`+inPlaceholders(len(uids))+`) AND model <> ''
+		GROUP BY session_uid, model ORDER BY session_uid, SUM(cost_usd) DESC, COUNT(*) DESC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("session models: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var uid, m string
+		if err := rows.Scan(&uid, &m); err != nil {
+			return nil, err
+		}
+		out[uid] = append(out[uid], m)
+	}
+	return out, rows.Err()
+}
+
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
