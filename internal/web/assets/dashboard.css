@@ -1923,3 +1923,19 @@ body.is-loading main { opacity: 0.6; transition: opacity 0.15s 0.1s; }
 .price-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; }
 .price-grid input { width: 100%; }
 .plain-list { list-style: none; display: grid; gap: 4px; }
+
+/* Planning */
+.section-note { padding: 12px 16px 0; color: var(--text-secondary); font-size: 13px; }
+#whatif-result { padding-bottom: 16px; color: var(--text-primary); min-height: 20px; }
+.inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 16px; font-size: 13px; }
+.inline-form input, .inline-form select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); max-width: 100%; }
+.inline-form input[type="number"] { width: 110px; }
+.c-green { color: var(--accent-green); }
+progress { appearance: none; width: 120px; height: 8px; border: 0; border-radius: 4px; overflow: hidden; background: var(--bg-tertiary); vertical-align: middle; }
+progress::-webkit-progress-bar { background: var(--bg-tertiary); }
+progress::-webkit-progress-value { background: var(--accent-green); }
+progress::-moz-progress-bar { background: var(--accent-green); }
+progress.budget-forecast::-webkit-progress-value { background: var(--accent-yellow); }
+progress.budget-forecast::-moz-progress-bar { background: var(--accent-yellow); }
+progress.budget-over::-webkit-progress-value { background: var(--accent-red); }
+progress.budget-over::-moz-progress-bar { background: var(--accent-red); }

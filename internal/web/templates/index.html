@@ -22,6 +22,7 @@
         <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-insights" data-swap="tab-insights" tabindex="-1" data-view-tab="insights">Insights{{if .Insights}} ({{len .Insights}}){{end}}</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-sessions" tabindex="-1" data-view-tab="sessions">Sessions</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-breakdown" tabindex="-1" data-view-tab="breakdown">Breakdowns</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-planning" tabindex="-1" data-view-tab="planning">Planning</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-system" tabindex="-1" data-view-tab="system">System</button>
       </nav>
     <div class="topbar-actions">
@@ -512,6 +513,69 @@
   </div>
   {{end}}
 
+  <div class="section" data-view-section="planning">
+    <div class="section-header"><span>Budgets this month</span><span class="badge">soft limits</span></div>
+    <div data-swap="budgets">
+    {{if .Budgets}}
+    <table id="budgets-table">
+      <thead><tr><th>Budget</th><th class="numeric">Spent</th><th class="numeric">Projected</th><th class="numeric">Monthly</th><th>Used</th><th></th></tr></thead>
+      <tbody>{{range .Budgets}}<tr>
+        <td title="{{.Name}}"><span class="badge">{{.Scope}}</span> {{.Label}}</td>
+        <td class="numeric">{{.SpentText}}</td><td class="numeric">{{.ProjectedText}}</td><td class="numeric">{{.MonthlyText}}</td>
+        <td><progress class="budget-{{.State}}" max="100" value="{{printf "%.0f" .Pct}}"></progress> {{if eq .State "over"}}<span class="c-red">over</span>{{else if eq .State "forecast"}}<span class="c-yellow">on track to pass</span>{{end}}</td>
+        <td><button type="button" class="btn-ghost btn-danger" data-remove-budget="{{.Name}}" data-scope="{{.Scope}}">Remove</button></td>
+      </tr>{{end}}</tbody>
+    </table>
+    {{else}}<div class="empty-state"><strong>No budgets yet.</strong><span>Set one below. Going over, or being on track to, raises an insight and a webhook alert.</span></div>{{end}}
+    </div>
+    <form class="inline-form" id="budget-form">
+      <label for="budget-scope">For a</label>
+      <select id="budget-scope"><option value="project">project</option>{{if .Facets.Tags}}<option value="tag">tag</option>{{end}}<option value="model">model</option><option value="machine">machine</option><option value="agent">program</option></select>
+      <label class="visually-hidden" for="budget-name">Name</label>
+      <input id="budget-name" list="budget-names" placeholder="name" required maxlength="500">
+      <datalist id="budget-names"></datalist>
+      <label for="budget-amount">Monthly $</label>
+      <input type="number" id="budget-amount" min="0.01" step="any" required>
+      <button type="submit" class="btn btn-primary">Set budget</button>
+    </form>
+  </div>
+
+  <div class="section" data-view-section="planning">
+    <div class="section-header"><span>Subscription value</span><span class="badge">last 30 days</span></div>
+    <p class="section-note">Costs on this dashboard are list prices. If a program is covered by a flat fee, this is what that fee bought you.</p>
+    <div data-swap="plans">
+    {{if .Plans}}
+    <table id="plans-table">
+      <thead><tr><th>Plan</th><th>Program</th><th class="numeric">Monthly fee</th><th class="numeric">Usage at list price</th><th class="numeric">Value</th><th></th></tr></thead>
+      <tbody>{{range .Plans}}<tr><td>{{.Name}}</td><td>{{.Agent}}</td><td class="numeric">{{.Monthly}}</td><td class="numeric">{{.Used}}</td>
+        <td class="numeric {{if .Better}}c-green{{else}}c-yellow{{end}}">{{.Multiple}}</td>
+        <td><button type="button" class="btn-ghost btn-danger" data-remove-plan="{{.Name}}">Remove</button></td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<div class="empty-state"><strong>No plans yet.</strong><span>Add a subscription to compare its fee with your usage.</span></div>{{end}}
+    </div>
+    <form class="inline-form" id="plan-form">
+      <label class="visually-hidden" for="plan-name">Plan name</label>
+      <input id="plan-name" placeholder="plan name" required maxlength="100">
+      <label for="plan-agent">covers</label>
+      <select id="plan-agent">{{range .Facets.Agents}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+      <label for="plan-fee">Monthly $</label>
+      <input type="number" id="plan-fee" min="0.01" step="any" required>
+      <button type="submit" class="btn btn-primary">Add plan</button>
+    </form>
+  </div>
+
+  <div class="section" data-view-section="planning">
+    <div class="section-header"><span>What if another model had done it?</span></div>
+    <p class="section-note">Re-costs every call in the current filter at another model's price today, with the same tokens. A different model would use different token counts, so treat it as a guide.</p>
+    <form class="inline-form" id="whatif-form">
+      <label for="whatif-model">Model</label>
+      <input id="whatif-model" list="whatif-models" required maxlength="200" placeholder="pick a model">
+      <datalist id="whatif-models">{{range .CatalogueModels}}<option value="{{.}}">{{end}}</datalist>
+      <button type="submit" class="btn btn-primary">Compare</button>
+    </form>
+    <div class="section-note" id="whatif-result" role="status"></div>
+  </div>
+
   {{if .Machines}}
   <div class="section" data-view-section="system">
     <div class="section-header">
@@ -642,7 +706,7 @@
   <div class="shortcuts-card">
     <h2 id="shortcuts-title">Keyboard shortcuts</h2>
     <dl>
-      <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Overview, Insights, Sessions, Breakdowns, System</dd>
+      <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Overview, Insights, Sessions, Breakdowns, Planning, System</dd>
       <dt><kbd>/</kbd></dt><dd>Search sessions</dd>
       <dt><kbd>f</kbd></dt><dd>Open or close filters</dd>
       <dt><kbd>r</kbd></dt><dd>Refresh</dd>

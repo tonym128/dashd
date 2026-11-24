@@ -147,7 +147,7 @@ func browserServer(t *testing.T) http.Handler {
 
 func TestBrowserTabsShowOnlyTheirOwnSections(t *testing.T) {
 	h := browserServer(t)
-	for _, view := range []string{"overview", "insights", "sessions", "breakdown", "system"} {
+	for _, view := range []string{"overview", "insights", "sessions", "breakdown", "planning", "system"} {
 		var stray []string
 		probe(t, h, 1440, "/?view="+view, `
 			return [...doc.querySelectorAll('[data-view-section]')]

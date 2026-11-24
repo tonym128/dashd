@@ -215,10 +215,12 @@ func cacheSavings(models []store.ModelStat, price PriceFunc) float64 {
 		if m.CacheReadTokens <= 0 {
 			continue
 		}
-		asInput, ok1 := price(m.Model, m.CacheReadTokens, 0, 0, 0, 0, now)
-		asCache, ok2 := price(m.Model, 0, 0, m.CacheReadTokens, 0, 0, now)
+		// Priced per thousand and scaled: the whole rollup as one prompt would
+		// select a long-prompt tier no single call reached.
+		asInput, ok1 := price(m.Model, 1000, 0, 0, 0, 0, now)
+		asCache, ok2 := price(m.Model, 0, 0, 1000, 0, 0, now)
 		if ok1 && ok2 && asInput > asCache {
-			saved += asInput - asCache
+			saved += (asInput - asCache) * float64(m.CacheReadTokens) / 1000
 		}
 	}
 	return saved
@@ -361,6 +363,8 @@ type NotifierConfig struct {
 	WebhookURL    string
 	DailyBudget   float64
 	MonthlyBudget float64
+	// Tags resolves tag budgets.
+	Tags Tags
 	// DigestEvery sends a digest covering the same span on this interval.
 	DigestEvery time.Duration
 	Log         *slog.Logger
@@ -435,6 +439,23 @@ func NotifyOnce(ctx context.Context, st *store.Store, cfg NotifierConfig) error 
 		alerts = append(alerts, alert{"notify.monthly_forecast", monthKey,
 			fmt.Sprintf("📈 dashd: this month is projected at $%.2f (range $%.2f–$%.2f), over the $%.2f budget.",
 				fc.Projected, fc.Low, fc.High, cfg.MonthlyBudget)})
+	}
+	budgets, err := budgetViews(ctx, st, cfg.Tags, now)
+	if err != nil {
+		return err
+	}
+	for _, b := range budgets {
+		switch b.State {
+		case "over":
+			alerts = append(alerts, alert{"notify.budget." + b.Scope + "." + b.Name, monthKey + ".over",
+				fmt.Sprintf("⚠️ dashd: %s %s has spent %s of its %s monthly budget.", b.Scope, b.Label, b.SpentText, b.MonthlyText)})
+		case "forecast":
+			// Once a budget has gone over, a later dip back under is not news.
+			if prev, _ := st.Meta("notify.budget." + b.Scope + "." + b.Name); prev != monthKey+".over" {
+				alerts = append(alerts, alert{"notify.budget." + b.Scope + "." + b.Name, monthKey + ".forecast",
+					fmt.Sprintf("📈 dashd: %s %s is projected at %s this month, over its %s budget.", b.Scope, b.Label, b.ProjectedText, b.MonthlyText)})
+			}
+		}
 	}
 	for _, a := range alerts {
 		if prev, _ := st.Meta(a.key); prev == a.mark {

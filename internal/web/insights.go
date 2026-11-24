@@ -52,6 +52,8 @@ type InsightInputs struct {
 	Machines      []machineStatusView
 	// PriceError is why the last price refresh failed, if it did.
 	PriceError string
+	// Extra insights computed elsewhere: budgets and spikes.
+	Extra []Insight
 	// Query is the page's current filter, kept on action links so following
 	// an insight narrows the view rather than resetting it.
 	Query url.Values
@@ -68,6 +70,10 @@ func withQuery(base url.Values, extra map[string]string) string {
 		q[k] = append([]string(nil), v...)
 	}
 	for k, v := range extra {
+		if v == "" {
+			q.Del(k)
+			continue
+		}
 		q.Set(k, v)
 	}
 	return "/?" + q.Encode()
@@ -131,6 +137,8 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 	if totals.Calls == 0 {
 		return out
 	}
+
+	out = append(out, in.Extra...)
 
 	// 0. Budget threshold alerts (when configured).
 	for _, b := range burn {

@@ -55,6 +55,9 @@ type Server struct {
 	// PriceStatus and PriceAdmin power the Prices panel. Optional.
 	PriceStatus *PriceStatus
 	PriceAdmin  PriceAdmin
+	// CatalogueModels lists every model with a known price, for the what-if
+	// picker. Optional.
+	CatalogueModels func() []string
 	// RepriceFunc, when set, powers POST /api/reprice.
 	RepriceFunc func(context.Context) (int, error)
 	// Optional soft spending thresholds for burn-rate alerts & insights.
@@ -123,6 +126,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/reprice", s.handleReprice)
 	mux.HandleFunc("/api/admin/price", s.handleAdminPrice)
+	mux.HandleFunc("/api/whatif", s.handleWhatIf)
+	mux.HandleFunc("/api/admin/budget", s.handleAdminBudget)
+	mux.HandleFunc("/api/admin/plan", s.handleAdminPlan)
 	mux.HandleFunc("/api/admin/prune", s.handleAdminPrune)
 	mux.HandleFunc("/api/admin/forget-session", s.handleAdminForgetSession)
 	mux.HandleFunc("/api/admin/rename-machine", s.handleAdminRenameMachine)
@@ -296,6 +302,9 @@ type pageData struct {
 	SourcesNeedAction bool
 	Machines          []machineStatusView
 	Prices            priceView
+	Budgets           []budgetView
+	Plans             []planView
+	CatalogueModels   []string
 	PriceChanges      []priceChangeView
 	Unpriced          []store.UnpricedModel
 	Insights          []Insight
@@ -475,6 +484,22 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	views, _ := s.scanViews(ctx)
 	sources := sourceViews(views)
 	prices := s.PriceStatus.view(now)
+	budgets, err := budgetViews(ctx, s.store, s.Tags, now)
+	if err != nil {
+		return pageData{}, err
+	}
+	plans, err := planViews(ctx, s.store, now)
+	if err != nil {
+		return pageData{}, err
+	}
+	dimDays, err := s.store.DimDays(ctx, filter, localDay(now).AddDate(0, 0, -21))
+	if err != nil {
+		return pageData{}, err
+	}
+	var catalogue []string
+	if s.CatalogueModels != nil {
+		catalogue = s.CatalogueModels()
+	}
 	pricePoints, err := s.store.PriceHistory(ctx)
 	if err != nil {
 		return pageData{}, err
@@ -486,7 +511,8 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	insights := BuildInsightsFull(InsightInputs{
 		Signals: signals, Totals: totals, Burn: burn, Forecast: fc,
 		DailyBudget: s.DailyBudget, MonthlyBudget: s.MonthlyBudget,
-		CacheSavings: savings, Machines: machineViews, PriceError: prices.LastError, Query: query, Now: now,
+		CacheSavings: savings, Machines: machineViews, PriceError: prices.LastError,
+		Extra: append(budgetInsights(budgets), spikeInsights(dimDays, now, query)...), Query: query, Now: now,
 	})
 	cards := burnCards(burn)
 	if fc.OK {
@@ -506,26 +532,29 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	}
 	burnNoteText += " Days are bucketed in " + tzName(now) + "."
 	return pageData{
-		Generated:      now.Format("2006-01-02 15:04:05"),
-		GeneratedEpoch: now.Unix(),
-		StatCards:      stat,
-		PayloadJSON:    template.JS(encoded),
-		FilterState:    parseFilterState(query),
-		Facets:         view,
-		Scan:           views,
-		ScanSummary:    scanSummary(views, machineViews),
-		Burn:           cards,
-		BurnNote:       burnNoteText,
-		Sources:        sources,
-		SourcesSummary: sourceSummary(sources),
-		Machines:       machineViews,
-		Prices:         prices,
-		PriceChanges:   priceChanges(pricePoints),
-		Unpriced:       unpriced,
-		Insights:       insights,
-		TopInsights:    topInsights(insights),
-		AuthEnabled:    s.AuthEnabled,
-		Empty:          totals.Calls == 0 && maxTS == 0,
+		Generated:       now.Format("2006-01-02 15:04:05"),
+		GeneratedEpoch:  now.Unix(),
+		StatCards:       stat,
+		PayloadJSON:     template.JS(encoded),
+		FilterState:     parseFilterState(query),
+		Facets:          view,
+		Scan:            views,
+		ScanSummary:     scanSummary(views, machineViews),
+		Burn:            cards,
+		BurnNote:        burnNoteText,
+		Sources:         sources,
+		SourcesSummary:  sourceSummary(sources),
+		Machines:        machineViews,
+		Prices:          prices,
+		Budgets:         budgets,
+		Plans:           plans,
+		CatalogueModels: catalogue,
+		PriceChanges:    priceChanges(pricePoints),
+		Unpriced:        unpriced,
+		Insights:        insights,
+		TopInsights:     topInsights(insights),
+		AuthEnabled:     s.AuthEnabled,
+		Empty:           totals.Calls == 0 && maxTS == 0,
 		// Shown whenever a local scan ran and a source needs attention, or when
 		// the database holds no calls at all (fresh install). A serve-only
 		// instance receiving remote pushes has no local scan_status rows and

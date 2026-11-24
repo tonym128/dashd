@@ -445,6 +445,79 @@
             }
         });
     }
+    // ------------------------------------------------------------ planning
+    const budgetForm = document.getElementById('budget-form');
+    const here = () => location.pathname + location.search;
+    async function savePlanning(url, body, done) {
+        try {
+            await dashdPost(url, body);
+            toast(done);
+            navigate(here(), false);
+            return true;
+        } catch (err) {
+            toast('Could not save: ' + err.message);
+            return false;
+        }
+    }
+    if (budgetForm) {
+        const scope = document.getElementById('budget-scope');
+        const names = document.getElementById('budget-names');
+        const fillNames = () => {
+            const sel = document.getElementById(scope.value);
+            names.innerHTML = Array.from(sel && sel.options || []).map(o => `<option value="${escapeHtml(o.value)}">`).join('');
+        };
+        scope.addEventListener('change', fillNames);
+        fillNames();
+        budgetForm.addEventListener('submit', async e => {
+            e.preventDefault();
+            const ok = await savePlanning('/api/admin/budget', {
+                scope: scope.value,
+                name: document.getElementById('budget-name').value.trim(),
+                monthly: Number(document.getElementById('budget-amount').value),
+            }, 'Budget set');
+            if (ok) budgetForm.reset();
+        });
+    }
+    const planForm = document.getElementById('plan-form');
+    if (planForm) {
+        planForm.addEventListener('submit', async e => {
+            e.preventDefault();
+            const ok = await savePlanning('/api/admin/plan', {
+                name: document.getElementById('plan-name').value.trim(),
+                agent: document.getElementById('plan-agent').value,
+                monthly: Number(document.getElementById('plan-fee').value),
+            }, 'Plan added');
+            if (ok) planForm.reset();
+        });
+    }
+    document.addEventListener('click', e => {
+        const budget = e.target.closest && e.target.closest('[data-remove-budget]');
+        if (budget) savePlanning('/api/admin/budget', { scope: budget.dataset.scope, name: budget.dataset.removeBudget, monthly: 0 }, 'Budget removed');
+        const plan = e.target.closest && e.target.closest('[data-remove-plan]');
+        if (plan) savePlanning('/api/admin/plan', { name: plan.dataset.removePlan, monthly: 0 }, 'Plan removed');
+    });
+    const whatif = document.getElementById('whatif-form');
+    if (whatif) {
+        whatif.addEventListener('submit', async e => {
+            e.preventDefault();
+            const out = document.getElementById('whatif-result');
+            const q = filterQuery();
+            q.set('target', document.getElementById('whatif-model').value.trim());
+            out.textContent = 'Working…';
+            try {
+                const resp = await fetch('/api/whatif?' + q.toString(), { headers: { Accept: 'application/json' } });
+                if (!resp.ok) throw new Error((await resp.text()).trim() || 'status ' + resp.status);
+                const r = await resp.json();
+                const pct = r.actual ? ' (' + (r.difference > 0 ? '+' : '') + (r.difference / r.actual * 100).toFixed(0) + '%)' : '';
+                out.textContent = Number(r.calls).toLocaleString() + ' calls: ' + money(r.actual) + ' as recorded, ' + money(r.hypothetical) +
+                    ' on ' + r.target + pct + '.' + (r.unpriced ? ' ' + r.unpriced + ' of the recorded calls have no price.' : '');
+            } catch (err) {
+                out.textContent = 'Could not compare: ' + err.message;
+            }
+        });
+        dashdRefreshers.push(() => { document.getElementById('whatif-result').textContent = ''; });
+    }
+
     const pruneForm = document.getElementById('admin-prune-form');
     if (pruneForm) {
         pruneForm.addEventListener('submit', async e => {

@@ -315,6 +315,7 @@ func run(o options, command string, stdout io.Writer) error {
 	srv.ScanDuration = scanner.LastDuration
 	srv.AuthEnabled = o.authToken != ""
 	srv.PriceAdmin = priceAdmin{st, pricer}
+	srv.CatalogueModels = pricer.LiveModelKeys
 	srv.PriceStatus = &web.PriceStatus{}
 	srv.PriceStatus.Configure(o.modelsRefresh, pricer.LiveCatalogueSize())
 	if command == "serve" {
@@ -334,6 +335,7 @@ func run(o options, command string, stdout io.Writer) error {
 			DailyBudget:   o.dailyBudget,
 			MonthlyBudget: o.monthlyBudget,
 			DigestEvery:   o.digestEvery,
+			Tags:          srv.Tags,
 			Log:           log,
 		})
 	}

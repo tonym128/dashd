@@ -1620,7 +1620,7 @@ updateSortIcons('tools-table', toolSort);
 
     // View tabs (overview, sessions, breakdown, system, all)
     const viewTabsEl = document.getElementById('view-tabs');
-    const validViews = new Set(['overview', 'insights', 'sessions', 'breakdown', 'system', 'all']);
+    const validViews = new Set(['overview', 'insights', 'sessions', 'breakdown', 'planning', 'system', 'all']);
     function setActiveView(view) {
         if (!validViews.has(view)) view = 'overview';
         if (viewTabsEl && viewTabsEl.querySelectorAll) {
@@ -1842,8 +1842,8 @@ updateSortIcons('tools-table', toolSort);
                 if (search && search.focus) search.focus();
             } else if (event.key === 'r') {
                 location.reload();
-            } else if (['1', '2', '3', '4', '5'].includes(event.key)) {
-                setActiveView(['overview', 'insights', 'sessions', 'breakdown', 'system'][Number(event.key) - 1]);
+            } else if (['1', '2', '3', '4', '5', '6'].includes(event.key)) {
+                setActiveView(['overview', 'insights', 'sessions', 'breakdown', 'planning', 'system'][Number(event.key) - 1]);
             } else if (event.key === 'f' && filterToggle && filterToggle.click) {
                 filterToggle.click();
             } else if (event.key === 't' && themeBtn && themeBtn.click) {
