@@ -128,6 +128,22 @@ type SessionWrite struct {
 	LastTS    time.Time
 	Calls     []Call
 	ToolCalls []ToolCall
+	// RateLimits are the times the agent was refused for a rate or usage limit.
+	RateLimits []RateLimit `json:",omitempty"`
+}
+
+// RateLimit is one refusal.
+type RateLimit struct {
+	Time   time.Time
+	Detail string
+}
+
+// Commit is one git commit made in a project.
+type Commit struct {
+	Project string `json:"project"`
+	Hash    string `json:"hash"`
+	TS      int64  `json:"ts"`
+	Subject string `json:"subject,omitempty"`
 }
 
 // ScanStatus is what one pass over one source produced. It is recorded so a
@@ -204,6 +220,9 @@ type IngestRequest struct {
 	// Orphaned lists session uids whose log has disappeared on the client, so
 	// the server can withdraw their transcript links too.
 	Orphaned []string `json:"orphaned,omitempty"`
+	// Commits are recent commits in the projects pushed from this machine, sent
+	// only when the agent runs with -git.
+	Commits []Commit `json:"commits,omitempty"`
 	// LastError is the client's most recent push failure, "" when healthy. It
 	// rides on heartbeats so the server can tell failing from switched off.
 	LastError string `json:"last_error,omitempty"`

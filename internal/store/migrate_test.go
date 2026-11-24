@@ -120,6 +120,9 @@ func openV0(t *testing.T, path string) {
 			t.Fatalf("seed: add %s: %v", col, err)
 		}
 	}
+	if _, err := db.Exec("CREATE TABLE rate_limit (session_uid TEXT)"); err != nil {
+		t.Fatalf("seed: add rate_limit: %v", err)
+	}
 	for _, tbl := range []string{"session", "call", "tool_call"} {
 		if _, err := db.Exec("ALTER TABLE " + tbl + " ADD COLUMN machine TEXT NOT NULL DEFAULT ''"); err != nil {
 			t.Fatalf("seed: add %s.machine: %v", tbl, err)
@@ -137,6 +140,9 @@ func openV0(t *testing.T, path string) {
 		if err := st.RecomputeSession(sess.UID); err != nil {
 			t.Fatalf("seed summaries %s: %v", sess.UID, err)
 		}
+	}
+	if _, err := db.Exec("DROP TABLE rate_limit"); err != nil {
+		t.Fatalf("seed: drop rate_limit: %v", err)
 	}
 	for _, tbl := range []string{"session", "call"} {
 		if _, err := db.Exec("ALTER TABLE " + tbl + " DROP COLUMN ingested_at"); err != nil {

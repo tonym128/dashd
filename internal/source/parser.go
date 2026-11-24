@@ -45,10 +45,11 @@ func StableKey(path string, agent string) string {
 
 // sessionBuilder accumulates a session as its lines are read.
 type sessionBuilder struct {
-	uid     string
-	agent   string
-	project string
-	title   string
+	rateLimits []model.RateLimit
+	uid        string
+	agent      string
+	project    string
+	title      string
 
 	calls     []model.Call
 	toolCalls []model.ToolCall
@@ -191,12 +192,13 @@ func (b *sessionBuilder) addTool(t model.ToolCall) {
 
 func (b *sessionBuilder) build(path string) model.SessionWrite {
 	sw := model.SessionWrite{
-		Session:   model.Session{UID: b.uid, Agent: b.agent, Project: b.project, Title: b.title},
-		Path:      path,
-		Calls:     b.calls,
-		ToolCalls: b.toolCalls,
-		FirstTS:   parseTime(b.firstTS),
-		LastTS:    parseTime(b.lastTS),
+		Session:    model.Session{UID: b.uid, Agent: b.agent, Project: b.project, Title: b.title},
+		Path:       path,
+		Calls:      b.calls,
+		ToolCalls:  b.toolCalls,
+		RateLimits: b.rateLimits,
+		FirstTS:    parseTime(b.firstTS),
+		LastTS:     parseTime(b.lastTS),
 	}
 	return sw
 }

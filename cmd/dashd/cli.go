@@ -40,6 +40,7 @@ type options struct {
 	machine       string
 	remote        string
 	once          bool
+	git           bool
 	currentPrices bool
 	before        string
 	dailyBudget   float64
@@ -153,6 +154,8 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 		"for 'push' and 'status', the local cursor database")
 	fs.BoolVar(&o.currentPrices, "current-prices", false,
 		"for 'reprice', forget the recorded price history and apply today's prices to all of it")
+	fs.BoolVar(&o.git, "git", false,
+		"read recent commits (hash, time, subject) in the projects agents worked in, to show what each cost; 'push' sends them to the server")
 	fs.BoolVar(&o.resync, "resync", false, "for 'push', forget local cursors and resend all history")
 	fs.StringVar(&o.redactPaths, "redact-paths", "none",
 		"for 'push', how project and log paths are sent: none, home (strip $HOME), basename, or hash")

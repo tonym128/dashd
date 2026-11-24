@@ -576,6 +576,31 @@
     <div class="section-note" id="whatif-result" role="status"></div>
   </div>
 
+  <div class="section" data-view-section="planning">
+    <div class="section-header"><span>Cost per commit</span><span class="badge">spend in the project since the commit before</span></div>
+    <div data-swap="commits">
+    {{if .Commits}}
+    <table id="commits-table">
+      <thead><tr><th>Commit</th><th>When</th><th>Project</th><th class="numeric">Calls</th><th class="numeric">Cost</th></tr></thead>
+      <tbody>{{range .Commits}}<tr><td class="project-name"><code>{{.Hash}}</code> {{.Subject}}</td><td>{{.When}}</td><td title="{{.Project}}">{{.ProjectName}}</td><td class="numeric">{{.Calls}}</td><td class="numeric">{{.Cost}}</td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<div class="empty-state"><strong>No commits in this view.</strong><span>Run <code>dashd push</code> or <code>serve-and-scan</code> with <code>-git</code> to match commits with sessions. It is off by default because it sends commit subjects.</span></div>{{end}}
+    </div>
+  </div>
+
+  <div class="section" data-view-section="planning">
+    <div class="section-header"><span>Rate limits</span></div>
+    <div data-swap="rate-limits">
+    {{if .RateLimits}}
+    <p class="section-note">{{.RateLimitTotal}} in this view. Claude Code records these; other programs do not yet.</p>
+    <table id="rate-limits-table">
+      <thead><tr><th>When</th><th>Program</th><th>Machine</th><th>Message</th><th></th></tr></thead>
+      <tbody>{{range .RateLimits}}<tr><td>{{.When}}</td><td>{{.Agent}}</td><td>{{.Machine}}</td><td class="source-detail">{{.Detail}}</td><td><a class="session-link" href="{{.URL}}">Open &rarr;</a></td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<div class="empty-state"><strong>No rate limits in this view.</strong><span>Recorded for Claude Code sessions from now on.</span></div>{{end}}
+    </div>
+  </div>
+
   {{if .Machines}}
   <div class="section" data-view-section="system">
     <div class="section-header">

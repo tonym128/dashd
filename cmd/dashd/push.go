@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tonym128/dashd/internal/gitlog"
 	"github.com/tonym128/dashd/internal/model"
 	"github.com/tonym128/dashd/internal/scan"
 	"github.com/tonym128/dashd/internal/source"
@@ -90,6 +91,9 @@ type remoteSink struct {
 	order    []string
 	orphaned []string
 
+	// git sends commits of the projects seen; see sendCommits.
+	git        bool
+	gitAt      time.Time
 	lastPushAt time.Time
 	// instanceChanged is set when the server reports a different database
 	// than the one this agent's cursors were built against.
@@ -134,12 +138,14 @@ func (r *remoteSink) withRedaction(mode redactMode, titles bool) *remoteSink {
 
 // ReplaceSession buffers a full rewrite of a session.
 func (r *remoteSink) ReplaceSession(sess model.SessionWrite) error {
+	r.noteProject(sess.Project)
 	r.queue(model.IngestSession{Mode: "replace", Session: r.redacted(sess)})
 	return nil
 }
 
 // AppendSession buffers new calls for a session.
 func (r *remoteSink) AppendSession(sess model.SessionWrite) error {
+	r.noteProject(sess.Project)
 	r.queue(model.IngestSession{Mode: "append", Session: r.redacted(sess)})
 	return nil
 }
@@ -161,6 +167,7 @@ func (r *remoteSink) queue(item model.IngestSession) {
 	}
 	merged := prev
 	merged.Session.Calls = append(append([]model.Call{}, prev.Session.Calls...), item.Session.Calls...)
+	merged.Session.RateLimits = append(append([]model.RateLimit{}, prev.Session.RateLimits...), item.Session.RateLimits...)
 	merged.Session.ToolCalls = append(append([]model.ToolCall{}, prev.Session.ToolCalls...), item.Session.ToolCalls...)
 	if item.Session.Project != "" {
 		merged.Session.Project = item.Session.Project
@@ -306,6 +313,11 @@ func (r *remoteSink) resetCursors(reason string) error {
 func (r *remoteSink) runPass(ctx context.Context, scanner *scan.Scanner) error {
 	err := scanner.RunOnce(ctx)
 	r.recordOutcome(err)
+	if err == nil {
+		if gerr := r.sendCommits(ctx); gerr != nil {
+			r.log.Warn("could not send commits", "error", gerr)
+		}
+	}
 	if r.instanceChanged {
 		if rerr := r.resetCursors("server database changed (new instance id)"); rerr != nil {
 			return errors.Join(err, rerr)
@@ -316,6 +328,64 @@ func (r *remoteSink) runPass(ctx context.Context, scanner *scan.Scanner) error {
 		}
 	}
 	return err
+}
+
+const (
+	metaGitProjects = "git.projects"
+	gitEvery        = 10 * time.Minute
+	gitWindow       = 30 * 24 * time.Hour
+	maxGitProjects  = 500
+	maxCommitsSent  = 5000
+)
+
+// gitProjects is the projects sessions have been pushed from, remembered
+// because a resumed session's log no longer says where it ran.
+func (r *remoteSink) gitProjects() []string {
+	raw, _ := r.state.Meta(metaGitProjects)
+	var out []string
+	_ = json.Unmarshal([]byte(raw), &out)
+	return out
+}
+
+func (r *remoteSink) noteProject(p string) {
+	if !r.git || r.state == nil || p == "" {
+		return
+	}
+	known := r.gitProjects()
+	for _, k := range known {
+		if k == p {
+			return
+		}
+	}
+	known = append(known, p)
+	if len(known) > maxGitProjects {
+		known = known[len(known)-maxGitProjects:]
+	}
+	raw, _ := json.Marshal(known)
+	_ = r.state.SetMeta(metaGitProjects, string(raw))
+}
+
+// sendCommits pushes the recent commits of those projects, with the same
+// redaction as everything else.
+func (r *remoteSink) sendCommits(ctx context.Context) error {
+	if !r.git || r.state == nil || time.Since(r.gitAt) < gitEvery {
+		return nil
+	}
+	r.gitAt = time.Now()
+	commits := gitlog.Collect(ctx, r.gitProjects(), time.Now().Add(-gitWindow))
+	if len(commits) == 0 {
+		return nil
+	}
+	if len(commits) > maxCommitsSent {
+		commits = commits[:maxCommitsSent]
+	}
+	for i := range commits {
+		commits[i].Project = r.redactPath(commits[i].Project)
+		if r.redactTitles {
+			commits[i].Subject = ""
+		}
+	}
+	return r.postIngest(model.IngestRequest{Machine: r.machine, Version: version, Commits: commits})
 }
 
 func (r *remoteSink) recordOutcome(err error) {
@@ -337,6 +407,12 @@ func (r *remoteSink) recordOutcome(err error) {
 func (r *remoteSink) redacted(sess model.SessionWrite) model.SessionWrite {
 	if r.redactTitles {
 		sess.Title = ""
+		// The refusal text is the provider's, but it is free text all the same.
+		limits := make([]model.RateLimit, len(sess.RateLimits))
+		for i, l := range sess.RateLimits {
+			limits[i] = model.RateLimit{Time: l.Time}
+		}
+		sess.RateLimits = limits
 	}
 	if r.redact == redactNone {
 		return sess

@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -303,6 +304,9 @@ type pageData struct {
 	Machines          []machineStatusView
 	Prices            priceView
 	Budgets           []budgetView
+	Commits           []commitView
+	RateLimits        []rateLimitView
+	RateLimitTotal    int
 	Plans             []planView
 	CatalogueModels   []string
 	PriceChanges      []priceChangeView
@@ -496,6 +500,19 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	if err != nil {
 		return pageData{}, err
 	}
+	commits, err := s.store.CommitCosts(ctx, filter, 100)
+	if err != nil {
+		return pageData{}, err
+	}
+	limits, limitTotal, err := s.store.RateLimits(ctx, filter, 50)
+	if err != nil {
+		return pageData{}, err
+	}
+	weekAgo := now.AddDate(0, 0, -7)
+	_, limitsWeek, err := s.store.RateLimits(ctx, store.Filter{DateFrom: &weekAgo}, 1)
+	if err != nil {
+		return pageData{}, err
+	}
 	var catalogue []string
 	if s.CatalogueModels != nil {
 		catalogue = s.CatalogueModels()
@@ -512,7 +529,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		Signals: signals, Totals: totals, Burn: burn, Forecast: fc,
 		DailyBudget: s.DailyBudget, MonthlyBudget: s.MonthlyBudget,
 		CacheSavings: savings, Machines: machineViews, PriceError: prices.LastError,
-		Extra: append(budgetInsights(budgets), spikeInsights(dimDays, now, query)...), Query: query, Now: now,
+		Extra: slices.Concat(budgetInsights(budgets), spikeInsights(dimDays, now, query), rateLimitInsights(limitsWeek)), Query: query, Now: now,
 	})
 	cards := burnCards(burn)
 	if fc.OK {
@@ -546,6 +563,9 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 		SourcesSummary:  sourceSummary(sources),
 		Machines:        machineViews,
 		Prices:          prices,
+		Commits:         commitViews(commits),
+		RateLimits:      rateLimitViews(limits),
+		RateLimitTotal:  limitTotal,
 		Budgets:         budgets,
 		Plans:           plans,
 		CatalogueModels: catalogue,

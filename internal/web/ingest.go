@@ -20,6 +20,7 @@ import (
 const (
 	maxIngestBytes    = 32 << 20 // 32 MiB
 	maxIngestSessions = 500
+	maxIngestCommits  = 5000
 )
 
 // validMachine limits machine names to what a hostname can look like, so a
@@ -114,6 +115,21 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	s.ingestMu.Lock()
 	defer s.ingestMu.Unlock()
 
+	if len(req.Commits) > maxIngestCommits {
+		http.Error(w, fmt.Sprintf("too many commits in one request (max %d)", maxIngestCommits), http.StatusRequestEntityTooLarge)
+		return
+	}
+	for i := range req.Commits {
+		c := &req.Commits[i]
+		if c.Project == "" || len(c.Project) > 4096 || len(c.Hash) < 7 || len(c.Hash) > 64 || c.TS <= 0 {
+			http.Error(w, "invalid commit", http.StatusBadRequest)
+			return
+		}
+		if len(c.Subject) > 400 {
+			c.Subject = strings.ToValidUTF8(c.Subject[:400], "")
+		}
+	}
+
 	items := make([]store.IngestItem, 0, len(req.Sessions))
 	callsTotal := 0
 	for _, item := range req.Sessions {
@@ -158,6 +174,11 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.store.ApplyIngest(items, orphaned); err != nil {
 		s.log.Error("ingest write failed", "machine", req.Machine, "sessions", len(items), "error", err)
+		http.Error(w, "ingest failed", http.StatusInternalServerError)
+		return
+	}
+	if err := s.store.SaveCommits(req.Machine, req.Commits); err != nil {
+		s.log.Error("save commits failed", "machine", req.Machine, "error", err)
 		http.Error(w, "ingest failed", http.StatusInternalServerError)
 		return
 	}

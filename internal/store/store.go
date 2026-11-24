@@ -723,6 +723,7 @@ func clearSession(tx *sql.Tx, uid string) error {
 	for _, q := range []string{
 		"DELETE FROM call      WHERE session_uid = ?",
 		"DELETE FROM tool_call WHERE session_uid = ?",
+		"DELETE FROM rate_limit WHERE session_uid = ?",
 		"DELETE FROM session   WHERE uid          = ?",
 	} {
 		if _, err := tx.Exec(q, uid); err != nil {
@@ -770,6 +771,15 @@ func insertSessionRows(tx *sql.Tx, sess model.SessionWrite) error {
 		return err
 	}
 	defer callStmt.Close()
+	for _, rl := range sess.RateLimits {
+		if rl.Time.IsZero() {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO rate_limit (session_uid, ts, agent, machine, detail) VALUES (?,?,?,?,?)`,
+			sess.UID, rl.Time.Unix(), sess.Agent, sess.Machine, rl.Detail); err != nil {
+			return err
+		}
+	}
 
 	// Calls older than the last prune are not brought back by a log that
 	// still holds them: the operator asked for that window to be gone.
@@ -997,6 +1007,7 @@ func (s *Store) ForgetSession(uid string) error {
 		for _, q := range []string{
 			"DELETE FROM call WHERE session_uid = ?",
 			"DELETE FROM tool_call WHERE session_uid = ?",
+			"DELETE FROM rate_limit WHERE session_uid = ?",
 			"DELETE FROM session WHERE uid = ?",
 		} {
 			if _, err := tx.Exec(q, uid); err != nil {

@@ -113,6 +113,11 @@ func (s *Store) PruneBefore(ctx context.Context, before time.Time, opt PruneOpti
 		if _, err := tx.ExecContext(ctx, `DELETE FROM tool_call WHERE `+cond, cutoff); err != nil {
 			return fmt.Errorf("prune tool_calls: %w", err)
 		}
+		for _, t := range []string{"rate_limit", "commit_log"} {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM `+t+` WHERE ts < ?`, cutoff); err != nil {
+				return fmt.Errorf("prune %s: %w", t, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM session WHERE NOT EXISTS (SELECT 1 FROM call c WHERE c.session_uid = session.uid)`); err != nil {
 			return fmt.Errorf("prune empty sessions: %w", err)
 		}
@@ -280,6 +285,9 @@ func (s *Store) RenameMachine(from, to string) (int64, error) {
 		for _, q := range []string{
 			`UPDATE tool_call SET machine = ? WHERE machine = ?`,
 			`UPDATE session SET machine = ? WHERE machine = ?`,
+			`UPDATE rate_limit SET machine = ? WHERE machine = ?`,
+			`UPDATE commit_log SET machine = ? WHERE machine = ?`,
+			`UPDATE OR REPLACE budget SET name = ? WHERE scope = 'machine' AND name = ?`,
 		} {
 			if _, err := tx.Exec(q, to, from); err != nil {
 				return err

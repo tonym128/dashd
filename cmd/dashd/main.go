@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tonym128/dashd/internal/gitlog"
 	"github.com/tonym128/dashd/internal/model"
 	"github.com/tonym128/dashd/internal/scan"
 	"github.com/tonym128/dashd/internal/source"
@@ -241,6 +242,7 @@ func run(o options, command string, stdout io.Writer) error {
 			withModelsSync(o.models, pricer, log).
 			withState(st).
 			withRedaction(redact, o.redactTitles)
+		rsink.git = o.git
 		if o.resync {
 			if err := rsink.resetCursors("requested with -resync"); err != nil {
 				return err
@@ -347,6 +349,9 @@ func run(o options, command string, stdout io.Writer) error {
 			defer scannerDone.Done()
 			scanner.Run(ctx, o.interval)
 		}()
+		if o.git {
+			go runGitCollector(ctx, st, o.machine, log)
+		}
 		// Deferred after the store's Close above, so it runs *before* it on every
 		// exit path, including a listener that failed to bind. The scanner is the
 		// only writer, so it has to be stopped before the database goes away.
@@ -467,6 +472,22 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// runGitCollector records local commits for serve-and-scan.
+func runGitCollector(ctx context.Context, st *store.Store, machine string, log *slog.Logger) {
+	for {
+		if _, _, projects, _, _, err := st.Facets(ctx); err == nil {
+			if err := st.SaveCommits(machine, gitlog.Collect(ctx, projects, time.Now().Add(-gitWindow))); err != nil {
+				log.Warn("could not record commits", "error", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(gitEvery):
+		}
+	}
 }
 
 // priceAt adapts a pricer to the store's and server's price function, which

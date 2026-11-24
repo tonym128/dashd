@@ -306,3 +306,44 @@ func (s *Server) handleAdminPlan(w http.ResponseWriter, r *http.Request) {
 	s.bumpGeneration()
 	writeJSON(w, map[string]any{"ok": true})
 }
+
+// ---------------------------------------------------------------- commits and rate limits
+
+type commitView struct {
+	When, Project, ProjectName, Hash, Subject, Cost, Machine string
+	Calls                                                    int
+}
+
+func commitViews(commits []store.CommitCost) []commitView {
+	out := make([]commitView, 0, len(commits))
+	for _, c := range commits {
+		subject := c.Subject
+		if subject == "" {
+			subject = "(subject not sent)"
+		}
+		out = append(out, commitView{When: displayTime(c.TS), Project: c.Project, ProjectName: filepath.Base(c.Project),
+			Hash: c.Hash[:min(8, len(c.Hash))], Subject: subject, Cost: usd(c.Cost), Machine: c.Machine, Calls: c.Calls})
+	}
+	return out
+}
+
+type rateLimitView struct{ When, Agent, Machine, Detail, URL string }
+
+func rateLimitViews(rows []store.RateLimitRow) []rateLimitView {
+	out := make([]rateLimitView, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, rateLimitView{When: displayTime(r.TS), Agent: r.Agent, Machine: r.Machine, Detail: r.Detail,
+			URL: "/session?uid=" + url.QueryEscape(r.SessionUID)})
+	}
+	return out
+}
+
+func rateLimitInsights(week int) []Insight {
+	if week < 3 {
+		return nil
+	}
+	return []Insight{{ID: "rate-limits", Category: "Limits", Severity: "tip",
+		Headline:    fmt.Sprintf("Rate limits stopped work %d times in the last 7 days", week),
+		Detail:      "Each is a request refused for a rate or usage limit. A larger plan, or moving some work to another program, avoids the wait.",
+		ActionLabel: "See when", ActionURL: "/?view=planning"}}
+}

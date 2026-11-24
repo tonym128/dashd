@@ -410,6 +410,20 @@ func consumeClaude(b *sessionBuilder, rec record, ctx *parseCtx) error {
 	}
 
 	msg := asMap(d["message"])
+	// Claude Code writes a refused request as a synthetic message.
+	if boolOf(d["isApiErrorMessage"]) && str(d, "error") == "rate_limit" && !ts.IsZero() {
+		detail := ""
+		for _, item := range asSlice(msg["content"]) {
+			if text := str(asMap(item), "text"); text != "" {
+				detail = text
+				break
+			}
+		}
+		if r := []rune(detail); len(r) > 200 {
+			detail = string(r[:200])
+		}
+		b.rateLimits = append(b.rateLimits, model.RateLimit{Time: ts, Detail: detail})
+	}
 	modelName := str(msg, "model")
 	if modelName == "<synthetic>" || modelName == "" {
 		return nil
