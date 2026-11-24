@@ -148,8 +148,8 @@ func burnCards(ws []burnWindow) []burnCard {
 		}
 		card := burnCard{
 			Label:  w.Label,
-			Value:  fmt.Sprintf("$%.2f", w.Cost),
-			Detail: fmt.Sprintf("$%.2f/day · %s: $%.2f", perDay, w.PriorLabel, w.PriorCost),
+			Value:  usd(w.Cost),
+			Detail: groupDollars(fmt.Sprintf("$%.2f/day · %s: $%.2f", perDay, w.PriorLabel, w.PriorCost)),
 		}
 		if pct, ok := w.delta(); ok {
 			card.Delta = fmt.Sprintf("%+.0f%%", pct)

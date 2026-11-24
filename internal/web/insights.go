@@ -339,6 +339,10 @@ func BuildInsightsFull(in InsightInputs) []Insight {
 		})
 	}
 
+	for i := range out {
+		out[i].Headline = groupDollars(out[i].Headline)
+		out[i].Detail = groupDollars(out[i].Detail)
+	}
 	return out
 }
 

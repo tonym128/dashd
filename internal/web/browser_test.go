@@ -126,7 +126,7 @@ func browserServer(t *testing.T) http.Handler {
 		var calls []model.Call
 		for d := 0; d < 20; d++ {
 			ts := now.AddDate(0, 0, -d).Add(-time.Minute)
-			calls = append(calls, model.Call{CallKey: fmt.Sprint(d), Agent: agent, Model: agent + "-some-long-model-name-5.5", Time: ts,
+			calls = append(calls, model.Call{CallKey: fmt.Sprint(d), Agent: agent, Model: agent + "-GGUF-some-very-long-local-model-file-name-30B-kquant-17gb.gguf", Time: ts,
 				Day: ts.Format("2006-01-02"), InputTokens: 766_100_000, OutputTokens: 24_100_000,
 				CacheReadTokens: 811_500_000, CacheWriteTokens: 29_700_000, ReasoningTokens: 13_900_000, TotalTokens: 1_645_300_000,
 				LLMSeconds: 2, CostUSD: 1234.5, Priced: true})

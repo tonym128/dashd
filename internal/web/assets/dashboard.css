@@ -68,60 +68,58 @@ h1 {
 }
 
 .stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: 16px;
-    margin-bottom: 32px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    margin-bottom: 24px;
+    background: var(--border-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
 }
 
 .stat-card {
+    flex: 1 1 130px;
     background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 16px;
+    padding: 10px 14px;
 }
 
 .stat-card .label {
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
 
 .stat-card .value {
-    font-size: 28px;
+    font-size: 18px;
     font-weight: 600;
-    margin-top: 4px;
+    margin-top: 2px;
 }
 
 .stat-card .value.cost {
-    color: var(--accent-green);
+    color: var(--text-primary);
 }
 
-/* The three timing/throughput magnitudes carry the same colour language the
-   sessions and projects tables use for the same quantities. The class was
-   emitted by the template and defined nowhere, so these cards rendered in
-   default text while the tables below them were colour-coded. */
-.stat-card .value.llm { color: var(--accent-purple); }
-.stat-card .value.tool { color: var(--accent-yellow); }
-.stat-card .value.tps { color: var(--accent-blue); }
-
 .token-card {
-    grid-column: span 2;
+    order: 1;
+    flex-basis: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
 }
 
 .token-breakdown {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px 14px;
-    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
     font-size: 12px;
 }
 
 .token-breakdown div {
     display: flex;
-    justify-content: space-between;
-    gap: 10px;
+    gap: 6px;
 }
 
 .token-cell {
@@ -159,6 +157,19 @@ h1 {
     margin-bottom: 24px;
     overflow-x: auto;
     overflow-y: hidden;
+}
+
+/* With room for every column the section need not scroll sideways, and not
+   being a scroll container is what lets its table header stick. */
+@media (min-width: 1200px) {
+    .section {
+        overflow: visible;
+    }
+    .section > table thead th {
+        position: sticky;
+        top: var(--topbar-height, 100px);
+        z-index: 2;
+    }
 }
 
 .section-header {
@@ -267,7 +278,7 @@ tr:hover {
 }
 
 .cost {
-    color: var(--accent-green);
+    color: var(--text-primary);
     font-weight: 500;
 }
 
@@ -425,7 +436,7 @@ tr:hover {
     width: 80px;
     text-align: right;
     font-size: 13px;
-    color: var(--accent-green);
+    color: var(--text-primary);
     flex-shrink: 0;
 }
 
@@ -463,7 +474,7 @@ tr:hover {
     text-align: right;
     font-size: 13px;
     font-weight: 600;
-    color: var(--accent-green);
+    color: var(--text-primary);
     flex-shrink: 0;
 }
 
@@ -728,21 +739,6 @@ td.numeric {
     align-items: center;
 }
 
-.pager button {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    padding: 4px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-}
-
-.pager button:hover:not(:disabled) {
-    border-color: var(--accent-blue);
-    color: var(--accent-blue);
-}
-
 .pager button:disabled {
     opacity: 0.4;
     cursor: default;
@@ -846,45 +842,7 @@ td.numeric {
 }
 
 .model-stat.cost {
-    color: var(--accent-green);
-}
-
-.copy-btn {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
     color: var(--text-primary);
-    padding: 4px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    margin-right: 4px;
-    transition: background 0.2s;
-}
-
-.copy-btn:hover {
-    background: var(--accent-blue);
-    border-color: var(--accent-blue);
-    /* The filled blue is a light colour, so the text flips to the dark page
-       background: the default text colour on a blue fill measured 2.14:1,
-       which fails WCAG 1.4.3 for a control's hover state. */
-    color: var(--bg-primary);
-}
-
-.icon-btn {
-    background: transparent;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font-size: 12px;
-    padding: 3px 8px;
-    margin-right: 4px;
-    transition: color 0.2s, border-color 0.2s;
-}
-
-.icon-btn:hover {
-    color: var(--accent-blue);
-    border-color: var(--accent-blue);
 }
 
 .session-link {
@@ -1170,7 +1128,7 @@ footer {
 .burn-value {
     font-size: 26px;
     font-weight: 600;
-    color: var(--accent-green);
+    color: var(--text-primary);
     margin-top: 2px;
 }
 
@@ -1290,6 +1248,34 @@ footer {
     border-color: var(--accent-blue);
 }
 
+a.btn { text-decoration: none; }
+
+/* Small controls share one ghost style. */
+.pager button,
+.copy-btn,
+.icon-btn,
+.btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 10px;
+}
+
+.pager button:hover:not(:disabled),
+.copy-btn:hover,
+.icon-btn:hover,
+.btn-ghost:hover {
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+.btn-danger:hover { border-color: var(--accent-red); }
+
 /* After .btn, whose background and border it replaces. */
 .btn-primary,
 .btn-primary:hover {
@@ -1404,12 +1390,14 @@ footer {
 
 /* ── Filter Toolbar, Presets & Chips ─────────────────────────────────── */
 .filter-toolbar {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 20px 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
-    margin-bottom: 16px;
 }
 
 .date-presets {
@@ -1874,4 +1862,37 @@ details.content summary { cursor: pointer; color: var(--text-secondary); margin-
     .saved-views { margin-left: 0; width: 100%; }
     .auto-refresh { max-width: 140px; }
     .comparison-grid { grid-template-columns: 1fr; padding: 8px; }
+}
+
+/* Controls in the sticky bar */
+.range-date {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    color: var(--text-primary);
+    color-scheme: dark;
+    font: inherit;
+    font-size: 12px;
+    padding: 3px 10px;
+}
+:root[data-theme="light"] .range-date { color-scheme: light; }
+.column-picker { margin-left: 8px; font-weight: 400; }
+.column-picker summary { min-height: 0; padding: 4px 10px; font-size: 12px; }
+.column-picker .multi-picker-menu { left: auto; right: 0; max-height: 320px; overflow-y: auto; }
+.section-header > :first-child { margin-right: auto; }
+.section-header { gap: 8px; flex-wrap: wrap; }
+.filter-bar { margin-top: 4px; }
+
+@media (max-width: 768px) {
+    .topbar { position: static; }
+    .filter-toolbar { padding: 0 12px 10px; }
+    .column-picker .multi-picker-menu { position: static; }
+}
+
+td > .model-tag {
+    margin: 0;
+    max-width: 190px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;
 }

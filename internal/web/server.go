@@ -454,7 +454,7 @@ func (s *Server) buildPayload(ctx context.Context, filter store.Filter, query ur
 	if savings > 0 {
 		for i := range stat {
 			if stat[i].Label == "Total Tokens" {
-				stat[i].Detail = append(stat[i].Detail, statDetail{"Cache saved", fmt.Sprintf("~$%.2f", savings)})
+				stat[i].Detail = append(stat[i].Detail, statDetail{"Cache saved", "~" + usd(savings)})
 			}
 		}
 	}

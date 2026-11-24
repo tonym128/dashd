@@ -33,6 +33,14 @@ function escapeHtml(text) {
     return String(text == null ? '' : text).replace(/[&<>"'`]/g, ch => HTML_ESCAPES[ch]);
 }
 
+// Dollars with thousands separators, the one format used across the page.
+function formatMoney(value, digits = 2) {
+    const n = Number(value) || 0;
+    return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', {
+        minimumFractionDigits: digits, maximumFractionDigits: digits,
+    });
+}
+
 const dashboardData = window.dashboardData || {};
 
 (function() {
@@ -192,7 +200,7 @@ const dashboardData = window.dashboardData || {};
                 const mCost = d.models[m] || 0;
                 const mPct = (mCost / maxCost * 100);
                 if (mPct < 0.01) return;
-                stackedSegments += `<div class="bar-segment" style="width:${mPct.toFixed(2)}%;background:${modelColor(m, i)}" title="${escapeHtml(m)}: $${mCost.toFixed(4)}"></div>`;
+                stackedSegments += `<div class="bar-segment" style="width:${mPct.toFixed(2)}%;background:${modelColor(m, i)}" title="${escapeHtml(m)}: ${formatMoney(mCost, 4)}"></div>`;
             });
 
             html += `
@@ -203,7 +211,7 @@ const dashboardData = window.dashboardData || {};
                             ${stackedSegments}
                         </div>
                     </div>
-                    <span class="amount">$${d.cost.toFixed(2)}</span>
+                    <span class="amount">${formatMoney(d.cost)}</span>
                 </div>`;
         });
 
@@ -238,7 +246,7 @@ const dashboardData = window.dashboardData || {};
             const mCost = mt.models[m] || 0;
             const mPct = mt.cost > 0 ? (mCost / mt.cost * 100) : 0;
             if (mPct < 0.01) return;
-            segments += `<div class="bar-segment" style="width:${mPct.toFixed(2)}%;background:${modelColor(m, i)};opacity:0.55" title="${escapeHtml(m)}: $${mCost.toFixed(4)}"></div>`;
+            segments += `<div class="bar-segment" style="width:${mPct.toFixed(2)}%;background:${modelColor(m, i)};opacity:0.55" title="${escapeHtml(m)}: ${formatMoney(mCost, 4)}"></div>`;
         });
         return `
             <div class="monthly-total-row">
@@ -248,7 +256,7 @@ const dashboardData = window.dashboardData || {};
                         ${segments}
                     </div>
                 </div>
-                <span class="amount monthly-amount">$${mt.cost.toFixed(2)}</span>
+                <span class="amount monthly-amount">${formatMoney(mt.cost)}</span>
             </div>`;
     }
 
@@ -486,7 +494,7 @@ function renderProjects() {
                 <span class="model-stat token-wide" title="${escapeHtml(tokenTitle(m))}">${formatCompactNumber(m.tokens)} tok</span>
                 <span class="model-stat token-detail-wide">${escapeHtml(tokenDetailText(m, true))}</span>
                 <span class="model-stat c-blue">${(m.avg_tps || 0).toFixed(1)} tok/s</span>
-                <span class="model-stat cost">$${m.cost.toFixed(2)}</span>
+                <span class="model-stat cost">${formatMoney(m.cost)}</span>
             </div>
         `).join('');
 
@@ -510,8 +518,8 @@ function renderProjects() {
                 <td class="c-purple numeric">${p.llm_time_display}</td>
                 <td class="c-yellow numeric">${p.tool_time_display}</td>
                 <td class="c-blue numeric">${(p.avg_tps || 0).toFixed(1)}</td>
-                <td class="cost numeric">$${p.cost.toFixed(2)}</td>
-                <td class="numeric" title="average cost per session">$${Number(p.per_session || 0).toFixed(2)}</td>
+                <td class="cost numeric">${formatMoney(p.cost)}</td>
+                <td class="numeric" title="average cost per session">${formatMoney(Number(p.per_session || 0))}</td>
                 <td class="c-muted">${p.last_activity_display}</td>
             </tr>
             <tr class="model-breakdown" id="${rowId}">
@@ -652,7 +660,7 @@ function renderSessions() {
                 <td class="c-blue numeric">${(s.avg_tps || 0).toFixed(1)}</td>
                 <td class="numeric" title="${formatFullNumber(s.messages)}">${formatCompactNumber(s.messages)}</td>
                 <td class="tokens numeric">${tokenCellHtml(s)}</td>
-                <td class="cost numeric">$${s.cost.toFixed(2)}</td>
+                <td class="cost numeric">${formatMoney(s.cost)}</td>
                 <td>
                     <button data-copy-resume data-resume-cmd="${escapeHtml(resumeCmd)}" class="icon-btn" title="Copy resume command">Copy</button>
                     ${s.orphaned
@@ -866,7 +874,7 @@ function renderProviders() {
                 <td class="tokens numeric" title="${formatFullNumber(p.cache_write_tokens)}">${formatCompactNumber(p.cache_write_tokens)}</td>
                 <td class="tokens numeric" title="${formatFullNumber(p.reasoning_tokens)}">${formatCompactNumber(p.reasoning_tokens)}</td>
                 <td class="c-blue numeric">${(p.avg_tps || 0).toFixed(1)}</td>
-                <td class="cost numeric">$${p.cost.toFixed(2)}</td>
+                <td class="cost numeric">${formatMoney(p.cost)}</td>
                 <td class="numeric">
                     <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${p.pct}%"></div>
@@ -909,7 +917,7 @@ function renderModels() {
 
         return `
             <tr>
-                <td><span class="model-tag ${modelClass} ${escapeHtml(provClass)}" title="Provider: ${escapeHtml(prov)}">${escapeHtml(m.name)}</span></td>
+                <td><span class="model-tag ${modelClass} ${escapeHtml(provClass)}" title="${escapeHtml(m.name)} · provider: ${escapeHtml(prov)}">${escapeHtml(m.name)}</span></td>
                 <td class="numeric" title="${formatFullNumber(m.messages)}">${formatCompactNumber(m.messages)}</td>
                 <td class="tokens numeric" title="${escapeHtml(breakdown)}">${formatCompactNumber(m.tokens)}</td>
                 <td class="tokens numeric" title="${formatFullNumber(m.input_tokens)}">${formatCompactNumber(m.input_tokens)}</td>
@@ -918,9 +926,9 @@ function renderModels() {
                 <td class="tokens numeric" title="${formatFullNumber(m.cache_write_tokens)}">${formatCompactNumber(m.cache_write_tokens)}</td>
                 <td class="tokens numeric" title="${formatFullNumber(m.reasoning_tokens)}">${formatCompactNumber(m.reasoning_tokens)}</td>
                 <td class="c-blue numeric">${(m.avg_tps || 0).toFixed(1)}</td>
-                <td class="cost numeric">$${m.cost.toFixed(2)}</td>
-                <td class="numeric" title="average cost per call">$${Number(m.per_call || 0).toFixed(4)}</td>
-                <td class="numeric" title="cost per 1,000 generated (output + reasoning) tokens">$${Number(m.per_1k_output || 0).toFixed(4)}</td>
+                <td class="cost numeric">${formatMoney(m.cost)}</td>
+                <td class="numeric" title="average cost per call">${formatMoney(Number(m.per_call || 0), 4)}</td>
+                <td class="numeric" title="cost per 1,000 generated (output + reasoning) tokens">${formatMoney(Number(m.per_1k_output || 0), 4)}</td>
                 <td class="numeric">
                     <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${m.pct}%"></div>
@@ -963,7 +971,7 @@ function renderTools() {
                 <td class="c-muted numeric">${t.avg_time_display}</td>
                 <td class="${errorClass} numeric">${t.errors}</td>
                 <td class="numeric" title="share of attributed cost: ${share.toFixed(1)}%">
-                    <span class="cost">$${(Number(t.cost) || 0).toFixed(2)}</span>
+                    <span class="cost">${formatMoney((Number(t.cost) || 0))}</span>
                     <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${share.toFixed(1)}%; background: var(--accent-green)"></div>
                     </div>
@@ -1068,7 +1076,7 @@ updateSortIcons('tools-table', toolSort);
             label: 'Cost',
             color: '#3fb950',
             value: b => b.cost,
-            format: v => '$' + v.toFixed(2),
+            format: v => formatMoney(v),
         },
     };
 
@@ -1213,7 +1221,7 @@ updateSortIcons('tools-table', toolSort);
                     : '—'],
             ['Avg response',
                 total.messages > 0 ? formatDuration(total.llm_seconds / total.messages) : '—'],
-            ['Cost', '$' + total.cost.toFixed(2)],
+            ['Cost', formatMoney(total.cost)],
             ['Peak ' + metric.label.toLowerCase(), peak > 0 ? metric.format(peak) : '—'],
             ['Active time',
                 active > 0 ? formatDuration(active * stepSeconds) : '—'],
@@ -1737,8 +1745,8 @@ updateSortIcons('tools-table', toolSort);
                 <td class="numeric tokens" title="${formatFullNumber(m.input_tokens)}">${formatCompactNumber(m.input_tokens)}</td>
                 <td class="numeric tokens" title="${formatFullNumber(m.output_tokens)}">${formatCompactNumber(m.output_tokens)}</td>
                 <td class="numeric tokens" title="${formatFullNumber(m.cache_read_tokens)}">${formatCompactNumber(m.cache_read_tokens)}</td>
-                <td class="numeric cost">$${Number(m.cost || 0).toFixed(2)}</td>
-                <td class="numeric">$${Number(m.per_session || 0).toFixed(2)}</td>
+                <td class="numeric cost">${formatMoney(Number(m.cost || 0))}</td>
+                <td class="numeric">${formatMoney(Number(m.per_session || 0))}</td>
                 <td class="numeric">
                     <div class="bar-container bar-inline">
                         <div class="bar" style="width: ${Number(m.pct || 0)}%"></div>

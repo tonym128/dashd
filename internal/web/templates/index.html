@@ -17,6 +17,13 @@
       <span class="topbar-divider" aria-hidden="true">/</span>
       <span class="scan-status-pill" title="{{.ScanSummary}}">{{.ScanSummary}}</span>
     </div>
+      <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Dashboard views">
+        <button type="button" class="view-tab is-active" role="tab" aria-selected="true" aria-controls="main-panel" id="tab-overview" data-view-tab="overview">Overview</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-insights" tabindex="-1" data-view-tab="insights">Insights{{if .Insights}} ({{len .Insights}}){{end}}</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-sessions" tabindex="-1" data-view-tab="sessions">Sessions</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-breakdown" tabindex="-1" data-view-tab="breakdown">Breakdowns</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-system" tabindex="-1" data-view-tab="system">System</button>
+      </nav>
     <div class="topbar-actions">
       <span class="generated-meta" id="generated-meta" data-epoch="{{.GeneratedEpoch}}" title="Data as of {{.Generated}}">Updated {{.Generated}}</span>
       <label class="visually-hidden" for="auto-refresh">Auto-refresh</label>
@@ -37,24 +44,6 @@
       {{end}}
     </div>
   </div>
-</div>
-
-<div class="container">
-  <header class="page-header">
-    <div class="page-header-row">
-      <div>
-        <h1>Agent costs</h1>
-      </div>
-      <nav class="view-tabs" id="view-tabs" role="tablist" aria-label="Dashboard views">
-        <button type="button" class="view-tab is-active" role="tab" aria-selected="true" aria-controls="main-panel" id="tab-overview" data-view-tab="overview">Overview</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-insights" tabindex="-1" data-view-tab="insights">Insights{{if .Insights}} ({{len .Insights}}){{end}}</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-sessions" tabindex="-1" data-view-tab="sessions">Sessions</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-breakdown" tabindex="-1" data-view-tab="breakdown">Breakdowns</button>
-        <button type="button" class="view-tab" role="tab" aria-selected="false" aria-controls="main-panel" id="tab-system" tabindex="-1" data-view-tab="system">System</button>
-      </nav>
-    </div>
-  </header>
-
   <div class="filter-toolbar" id="filter-toolbar">
     <div class="date-presets" role="group" aria-label="Quick date ranges">
       <span class="presets-label">Range:</span>
@@ -63,6 +52,11 @@
       <button type="button" class="preset-btn" data-date-preset="mtd">MTD</button>
       <button type="button" class="preset-btn" data-date-preset="30d">30d</button>
       <button type="button" class="preset-btn" data-date-preset="all">All time</button>
+      <label class="visually-hidden" for="date_from">Date from</label>
+      <input type="date" class="range-date" name="date_from" id="date_from" form="filter-form" data-auto-apply min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}" title="Date from">
+      <span class="presets-label" aria-hidden="true">–</span>
+      <label class="visually-hidden" for="date_to">Date to</label>
+      <input type="date" class="range-date" name="date_to" id="date_to" form="filter-form" data-auto-apply min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}" title="Date to">
     </div>
     <div class="active-filter-chips" id="active-filter-chips"></div>
     <div class="saved-views">
@@ -74,7 +68,10 @@
       <button type="button" id="delete-view" class="btn btn-secondary" title="Delete the selected saved view" hidden>Delete</button>
     </div>
   </div>
+</div>
 
+<div class="container">
+  <h1 class="visually-hidden">Agent costs</h1>
   <div class="filter-bar{{if not .FilterState.Active}} is-collapsed{{end}}" id="filter-panel">
     <form method="get" action="/" id="filter-form">
       <div class="filter-group">
@@ -109,12 +106,6 @@
         </select>
       </div>
       {{end}}
-      <div class="filter-group filter-dates">
-        <label for="date_from">Date from</label>
-        <input type="date" name="date_from" id="date_from" min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}">
-        <label for="date_to" class="date-to-label">Date to</label>
-        <input type="date" name="date_to" id="date_to" min="{{.Facets.MinDate}}" max="{{.Facets.MaxDate}}">
-      </div>
       <div class="filter-actions">
         <button type="submit" class="btn btn-primary">Apply</button>
         <a href="/" class="clear-link">Clear</a>
@@ -189,6 +180,19 @@
     {{end}}
   </div>
   <p class="burn-note" data-view-section="overview">{{.BurnNote}}</p>
+
+  <div class="section" data-view-section="overview">
+    <div class="section-header">
+      <span>Daily Spending <span class="badge tz-badge" id="tz-badge" title="Calls are bucketed into calendar days in this timezone"></span></span>
+      <a class="btn btn-secondary btn-small" data-export="daily" href="/api/export?kind=daily">Export</a>
+      <div class="sub-tabs sub-tabs-flush" id="daily-rollup-tabs" role="tablist" aria-label="Spending rollup">
+        <button type="button" class="sub-tab is-active" role="tab" aria-selected="true" data-daily-rollup="daily">Daily</button>
+        <button type="button" class="sub-tab" role="tab" aria-selected="false" data-daily-rollup="weekly">Weekly</button>
+        <button type="button" class="sub-tab" role="tab" aria-selected="false" data-daily-rollup="monthly">Monthly</button>
+      </div>
+    </div>
+    <div class="daily-chart" id="daily-chart-content"></div>
+  </div>
 
   <div class="stats-grid" data-view-section="overview">
     {{range .StatCards}}
@@ -328,19 +332,6 @@
         <tbody id="activity-tbody"></tbody>
       </table>
     </div>
-  </div>
-
-  <div class="section" data-view-section="overview">
-    <div class="section-header">
-      <span>Daily Spending <span class="badge tz-badge" id="tz-badge" title="Calls are bucketed into calendar days in this timezone"></span></span>
-      <a class="btn btn-secondary btn-small" data-export="daily" href="/api/export?kind=daily">Export</a>
-      <div class="sub-tabs sub-tabs-flush" id="daily-rollup-tabs" role="tablist" aria-label="Spending rollup">
-        <button type="button" class="sub-tab is-active" role="tab" aria-selected="true" data-daily-rollup="daily">Daily</button>
-        <button type="button" class="sub-tab" role="tab" aria-selected="false" data-daily-rollup="weekly">Weekly</button>
-        <button type="button" class="sub-tab" role="tab" aria-selected="false" data-daily-rollup="monthly">Monthly</button>
-      </div>
-    </div>
-    <div class="daily-chart" id="daily-chart-content"></div>
   </div>
 
   <div class="section" data-view-section="sessions">

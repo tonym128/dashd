@@ -181,8 +181,8 @@ func monthForecast(burn []burnWindow, now time.Time) forecast {
 func forecastCard(f forecast, monthlyBudget float64) burnCard {
 	c := burnCard{
 		Label:      "Projected month",
-		Value:      fmt.Sprintf("$%.2f", f.Projected),
-		Detail:     fmt.Sprintf("range $%.2f–$%.2f · %d days left", f.Low, f.High, f.DaysLeft),
+		Value:      usd(f.Projected),
+		Detail:     groupDollars(fmt.Sprintf("range $%.2f–$%.2f · %d days left", f.Low, f.High, f.DaysLeft)),
 		Delta:      "forecast",
 		DeltaClass: "burn-flat",
 	}

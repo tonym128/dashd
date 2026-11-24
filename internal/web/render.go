@@ -370,7 +370,7 @@ func sessionView(s store.SessionRow) map[string]any {
 		"Title":      s.Title,
 		"Calls":      s.Calls,
 		"Tokens":     s.TotalTokens,
-		"Cost":       fmt.Sprintf("$%.2f", s.Cost),
+		"Cost":       usd(s.Cost),
 		"LLMTime":    humanDuration(s.LLMSeconds),
 		"ToolTime":   humanDuration(s.ToolSeconds),
 		"Wall":       humanDuration(s.WallSeconds),
@@ -513,7 +513,7 @@ type statDetail struct {
 // tables below, which are drawn from the same rows.
 func statCards(t store.Totals) []statCard {
 	cards := []statCard{
-		{Label: "Total Cost", Value: fmt.Sprintf("$%.2f", t.Cost), Class: "cost"},
+		{Label: "Total Cost", Value: usd(t.Cost), Class: "cost"},
 		{Label: "Projects", Value: groupInt64(int64(t.Projects))},
 		{Label: "Sessions", Value: groupInt64(int64(t.Sessions))},
 		{Label: "LLM Calls", Value: groupInt64(int64(t.Calls))},

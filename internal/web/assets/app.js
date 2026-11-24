@@ -25,7 +25,7 @@
             try { localStorage.setItem(key, value); } catch (_) {}
         },
     };
-    const money = (v, digits) => '$' + Number(v || 0).toFixed(digits === undefined ? 2 : digits);
+    const money = (v, digits) => formatMoney(v, digits);
     const filterQuery = () => (typeof currentFilterParams === 'function'
         ? currentFilterParams() : new URLSearchParams(location.search));
 
@@ -103,6 +103,17 @@
         }
     } catch (_) {}
     const form = document.getElementById('filter-form');
+    document.querySelectorAll('[data-auto-apply]').forEach(el => {
+        el.addEventListener('change', () => { if (form && form.requestSubmit) form.requestSubmit(); });
+    });
+    const topbar = document.querySelector('.topbar');
+    function measureTopbar() {
+        if (topbar && topbar.offsetHeight) {
+            document.documentElement.style.setProperty('--topbar-height', topbar.offsetHeight + 'px');
+        }
+    }
+    measureTopbar();
+    if (window.addEventListener) window.addEventListener('resize', measureTopbar);
     if (form) form.addEventListener('submit', rememberScroll);
     document.addEventListener('click', e => {
         const t = e.target;
@@ -170,6 +181,62 @@
         params.set('format', 'csv');
         a.setAttribute('href', '/api/export?' + params.toString());
         a.setAttribute('download', '');
+    });
+
+    // ------------------------------------------------------------ column chooser
+    // Columns are hidden by rule rather than per cell, so a re-render keeps them
+    // hidden. The first column names the row and always stays.
+    const columnTables = ['sessions-table', 'models-table', 'providers-table', 'projects-table', 'machines-table', 'tools-table'];
+    let hiddenColumns = {};
+    try { hiddenColumns = JSON.parse(store.get('dashd:columns', '{}')) || {}; } catch (_) {}
+    const columnStyle = document.createElement('style');
+    if (document.head && document.head.appendChild) document.head.appendChild(columnStyle);
+    function paintColumns() {
+        columnStyle.textContent = Object.keys(hiddenColumns).filter(id => columnTables.includes(id)).map(id =>
+            (hiddenColumns[id] || []).map(n => Number(n)).filter(n => n > 1).map(n =>
+                `#${id} thead th:nth-child(${n}), #${id} tbody td:nth-child(${n}) { display: none; }`).join('\n')).join('\n');
+    }
+    paintColumns();
+    columnTables.forEach(id => {
+        const table = document.getElementById(id);
+        const section = table && table.closest ? table.closest('.section') : null;
+        const header = section && section.querySelector('.section-header');
+        if (!header) return;
+        const picker = document.createElement('details');
+        picker.className = 'multi-picker column-picker';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Columns';
+        picker.appendChild(summary);
+        const menu = document.createElement('div');
+        menu.className = 'multi-picker-menu';
+        Array.from(table.querySelectorAll('thead th')).forEach((th, i) => {
+            if (i === 0) return;
+            const label = document.createElement('label');
+            label.className = 'multi-picker-item';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = !(hiddenColumns[id] || []).includes(i + 1);
+            cb.addEventListener('change', () => {
+                const set = new Set(hiddenColumns[id] || []);
+                if (cb.checked) set.delete(i + 1); else set.add(i + 1);
+                hiddenColumns[id] = Array.from(set);
+                store.set('dashd:columns', JSON.stringify(hiddenColumns));
+                paintColumns();
+            });
+            const name = document.createElement('span');
+            name.textContent = th.textContent.replace(/[▲▼]/g, '').trim();
+            label.appendChild(cb);
+            label.appendChild(name);
+            menu.appendChild(label);
+        });
+        picker.appendChild(menu);
+        header.appendChild(picker);
+    });
+    // A picker closes when the click lands elsewhere.
+    document.addEventListener('click', e => {
+        document.querySelectorAll('details.multi-picker[open]').forEach(d => {
+            if (!d.contains(e.target)) d.removeAttribute('open');
+        });
     });
 
     // ------------------------------------------------------------ timezone
