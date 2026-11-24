@@ -9,7 +9,9 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -127,7 +129,7 @@ func (s *Server) Handler() http.Handler {
 	// Outermost, so the headers are on every response the dashboard produces —
 	// including the assets, which is where a policy that only covered documents
 	// would be one bypass away from useless.
-	return withSecurityHeaders(withRequestGuards(logRequests(s.log, mux)))
+	return withSecurityHeaders(withRequestGuards(logRequests(s.log, withGzip(mux))))
 }
 
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
@@ -157,9 +159,16 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// The browser is not the bottleneck here and a stale stylesheet is a
-	// confusing bug report, so revalidation beats caching.
+	// A stale stylesheet is a confusing bug report, so the browser revalidates
+	// every time and an unchanged asset costs an empty 304.
+	sum := sha256.Sum256(data)
+	tag := `"` + hex.EncodeToString(sum[:12]) + `"`
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", tag)
+	if strings.Contains(r.Header.Get("If-None-Match"), tag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.Write(data)
 }
 
