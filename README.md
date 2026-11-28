@@ -38,6 +38,7 @@ go build -o dashd ./cmd/dashd
 | `insights` | Print usage insights (`-json`, filter flags; supports `-remote`) |
 | `query` | Run a read-only SQL query (`-sql`) or inspect `-schema` (local DB or `-remote`) |
 | `mcp` | Run a read-only Model Context Protocol (MCP) server over stdio (local DB or `-remote`) |
+| `proxy` | Transparent HTTP proxy for `ollama`, `llama-server`, OpenAI and Anthropic APIs (local DB or `-remote`) |
 | `update-models` | Download the latest OpenRouter model pricing to `-models` |
 | `self-update` | Install the latest release (checksum-verified, never downgrades) |
 | `doctor` | Check agent logs, pricing, the database and the remote server |
@@ -322,6 +323,24 @@ Omit `-remote` to run `dashd mcp` directly against the local SQLite database. Fo
   }
 }
 ```
+
+## Proxy for Ollama, `llama-server` & direct APIs
+
+Use `dashd proxy` to capture token usage and timing for local inference engines (`ollama`, `llama-server`) and direct OpenAI/Anthropic API clients that do not write session logs to disk:
+
+```bash
+# Proxy local Ollama (:11434) on :8754, mark calls $0 (-free), and push to your central server:
+dashd proxy \
+  -upstream http://127.0.0.1:11434 \
+  -listen 127.0.0.1:8754 \
+  -free \
+  -remote https://dashd.example.com \
+  -ingest-token-file ~/.config/dashd/ingest.token
+```
+
+- **Streaming & protocols:** transparently passes through SSE (`text/event-stream`), NDJSON (`application/x-ndjson`), and JSON for OpenAI (`/v1/chat/completions`, `/v1/completions`, `/v1/responses`), Ollama (`/api/chat`, `/api/generate`), `llama-server` (`timings`), and Anthropic (`/v1/messages`).
+- **No double-counting:** requests carrying `X-Dashd-Skip: 1` or a scanned coding-harness `User-Agent` (`-skip-agents`, default: `opencode,claude-code,claude-cli,codex,gemini-cli,antigravity,pi-agent`) are forwarded without recording.
+- **Per-request attribution:** optional headers `X-Dashd-Project`, `X-Dashd-Session`, and `X-Dashd-Agent` tag calls and are stripped before forwarding upstream.
 
 ## Security
 

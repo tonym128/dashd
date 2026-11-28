@@ -146,6 +146,8 @@ func run(o options, command string, stdout io.Writer) error {
 			return runQuery(ctx, o, nil, stdout)
 		case "mcp":
 			return runMCP(ctx, o, nil, os.Stdin, stdout, log)
+		case "proxy":
+			return runProxy(ctx, o, nil, log, stdout)
 		}
 	}
 
@@ -191,6 +193,8 @@ func run(o options, command string, stdout io.Writer) error {
 		return runQuery(ctx, o, st, stdout)
 	case "mcp":
 		return runMCP(ctx, o, st, os.Stdin, stdout, log)
+	case "proxy":
+		return runProxy(ctx, o, st, log, stdout)
 	case "prune":
 		if o.before == "" {
 			return fmt.Errorf("-before YYYY-MM-DD is required for prune")

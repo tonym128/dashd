@@ -26,7 +26,7 @@ const defaultCommand = "serve-and-scan"
 // commands is the complete set. It is a slice rather than inline cases in a
 // switch so that the same list can be printed in the error message and the
 // usage text, which is the only way those two stay in agreement.
-var commands = []string{"serve-and-scan", "serve", "scan", "push", "status", "reprice", "prune", "backup", "export", "digest", "update-models", "self-update", "doctor", "insights", "stats", "query", "mcp"}
+var commands = []string{"serve-and-scan", "serve", "scan", "push", "status", "reprice", "prune", "backup", "export", "digest", "update-models", "self-update", "doctor", "insights", "stats", "query", "mcp", "proxy"}
 
 // options is the parsed command line.
 type options struct {
@@ -97,6 +97,12 @@ type options struct {
 	sqlQuery   string
 	showSchema bool
 	queryLimit int
+
+	// proxy
+	upstream   string
+	listen     string
+	skipAgents string
+	free       bool
 
 	tagsFile string
 	verbose  bool
@@ -195,6 +201,11 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 	fs.StringVar(&o.sqlQuery, "sql", "", "for 'query', a single read-only SQL query (SELECT, WITH, EXPLAIN)")
 	fs.BoolVar(&o.showSchema, "schema", false, "for 'query', print the SQLite schema instead of running SQL")
 	fs.IntVar(&o.queryLimit, "limit", 500, "for 'query', maximum rows to return (max 5000)")
+	fs.StringVar(&o.upstream, "upstream", "", "for 'proxy', upstream LLM server URL (e.g. http://127.0.0.1:11434 or http://127.0.0.1:8080)")
+	fs.StringVar(&o.listen, "listen", "127.0.0.1:8754", "for 'proxy', local address to listen on")
+	fs.StringVar(&o.skipAgents, "skip-agents", "opencode,claude-code,claude-cli,codex,gemini-cli,antigravity,pi-agent",
+		"for 'proxy', comma-separated User-Agent substrings to skip recording (avoids duplicating scanned harnesses)")
+	fs.BoolVar(&o.free, "free", false, "for 'proxy', record calls as $0.00 priced (ideal for local ollama/llama-server)")
 	fs.StringVar(&o.tagsFile, "tags-file", "",
 		"JSON file mapping a tag (client, team, cost centre) to a list of project path prefixes")
 	fs.BoolVar(&o.verbose, "verbose", false, "log every request and scan detail")
@@ -298,6 +309,7 @@ Commands:
   stats           print totals from the database (local DB or -remote)
   query           run a read-only SQL query (-sql) or inspect -schema (local DB or -remote)
   mcp             run a read-only Model Context Protocol (MCP) server over stdio (local DB or -remote)
+  proxy           transparent HTTP proxy for ollama, llama-server, OpenAI and Anthropic APIs
 
 Flags:
 `)

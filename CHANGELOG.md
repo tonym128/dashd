@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dashd proxy`:** transparent HTTP pass-through proxy (`internal/proxy`) for
+  `ollama`, `llama-server`, OpenAI-compatible (`/v1/chat/completions`,
+  `/v1/completions`, `/v1/responses`), and Anthropic (`/v1/messages`) APIs,
+  supporting SSE/NDJSON streaming, gzip responses, `-free` local `$0` pricing,
+  local SQLite or `-remote` `/api/ingest` delivery, per-request attribution
+  headers (`X-Dashd-Project`, `X-Dashd-Session`, `X-Dashd-Agent`), and
+  automatic deduplication bypass (`X-Dashd-Skip`, `-skip-agents`).
+
 ## [0.11.0] - 2026-11-28
 
 ### Added
