@@ -26,3 +26,7 @@ coverage.txt
 *.db
 *.db-wal
 *.db-shm
+
+# Machine-local deployment notes and server inventories.
+*.local.md
+SERVERS.local.md

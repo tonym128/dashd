@@ -14,6 +14,8 @@ services:
       DASHD_AUTH_TOKEN: "${DASHD_AUTH_TOKEN:?set DASHD_AUTH_TOKEN, e.g. export DASHD_AUTH_TOKEN=$(openssl rand -hex 32)}"
       # Write-only token for push agents; give laptops this one, not the dashboard token.
       DASHD_INGEST_TOKEN: "${DASHD_INGEST_TOKEN:?set DASHD_INGEST_TOKEN, e.g. export DASHD_INGEST_TOKEN=$(openssl rand -hex 32)}"
+      # Optional: read-only token for LLMs, MCP clients, scripts and external services; cannot ingest or run admin actions.
+      DASHD_READ_TOKEN: "${DASHD_READ_TOKEN:-}"
       # Optional: separate token for reprice/prune/rename; without it the dashboard token is admin.
       DASHD_ADMIN_TOKEN: "${DASHD_ADMIN_TOKEN:-}"
       # Timezone used to bucket calls into days.

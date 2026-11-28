@@ -192,6 +192,58 @@ The installers verify the download against the release's signed `checksums.txt`,
 
 Packages: release pages carry `.deb`, `.rpm` and Arch packages; there is a Homebrew formula (`brew install tonym128/tap/dashd`) and a Scoop manifest when the tap and bucket are set up, and a source [PKGBUILD](packaging/aur/PKGBUILD).
 
+## Read-only API, SQL queries & MCP
+
+Give LLMs, scripts and external services a `-read-token` (`DASHD_READ_TOKEN` / `-read-token-file`): it grants read-only access to the dashboard, read APIs, `/api/query` and `/mcp`, and refuses `/api/ingest`, `/api/reprice` and `/api/admin/*`.
+
+### Read-only HTTP JSON endpoints
+
+All endpoints accept `Authorization: Bearer <token>` and the standard filter query parameters (`range`, `from`, `to`, `project`, `agent`, `model`, `machine`, `tag`):
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/summary` | Full rollup payload (totals, burn windows, daily series, models, providers, projects, machines, tools, tags, facets, insights) |
+| `GET /api/insights` | Ordered cost, efficiency, cache, budget and spike insights |
+| `GET /api/digest?days=7` | Usage digest (`format=markdown` for raw Markdown, JSON by default) |
+| `GET /api/stats` | Database totals, machines and per-source scan status |
+| `GET /api/sessions` | Paginated sessions (`limit`, `offset`, `sort`) |
+| `GET /api/export?kind=calls&format=json` | Streaming CSV/JSON export (`kind=calls\|sessions\|projects\|models\|machines\|daily\|tools\|tags`) |
+| `GET /api/schema` | SQLite tables, views and columns |
+| `POST /api/query` (`{"sql":"...","limit":500}`) | Single read-only SQL query (`SELECT`, `WITH`, `EXPLAIN`) enforced with `PRAGMA query_only = ON`, 10s timeout and row cap (also `GET /api/query?sql=...`) |
+
+### Remote CLI & `query`
+
+`stats`, `insights`, `digest`, `export` and `query` work against a remote server with `-remote` + `-read-token-file` (or `-auth-token-file`) without needing a local database:
+
+```bash
+dashd stats    -remote https://dashd.example.com -read-token-file ~/.config/dashd/read.token
+dashd insights -remote https://dashd.example.com -read-token-file ~/.config/dashd/read.token
+dashd query    -remote https://dashd.example.com -read-token-file ~/.config/dashd/read.token -schema
+dashd query    -remote https://dashd.example.com -read-token-file ~/.config/dashd/read.token \
+  -sql "SELECT model, COUNT(*) AS calls, ROUND(SUM(cost_usd),2) AS usd FROM call GROUP BY model ORDER BY usd DESC LIMIT 10"
+```
+
+### Model Context Protocol (MCP)
+
+`dashd` exposes six read-only MCP tools (`get_summary`, `list_sessions`, `get_insights`, `get_digest`, `get_schema`, `query_sql`) over both **stdio** and **Streamable HTTP** (`POST /mcp`):
+
+```json
+{
+  "mcpServers": {
+    "dashd": {
+      "command": "dashd",
+      "args": [
+        "mcp",
+        "-remote", "https://dashd.example.com",
+        "-read-token-file", "/home/you/.config/dashd/read.token"
+      ]
+    }
+  }
+}
+```
+
+Omit `-remote` to run `dashd mcp` directly against the local SQLite database.
+
 ## Security
 
 By default, `dashd` binds to `127.0.0.1` with no authentication, refuses cross-site writes and DNS-rebinding requests, and does not accept pushes. A non-loopback address needs a token: browsers sign in at `/login`, API clients send `Authorization: Bearer <token>`. See [SECURITY.md](SECURITY.md) for the roles, token files and threat model.
