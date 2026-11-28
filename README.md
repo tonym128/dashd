@@ -62,7 +62,7 @@ go build -o dashd ./cmd/dashd
 | `-interval` | `30s` | How often to scan or push |
 | `-home` | `$HOME` | Where to look for agent logs |
 | `-machine` | hostname | Machine name attached to scanned sessions and calls |
-| `-remote` | none | Server URL for `push` (also `DASHD_REMOTE`) |
+| `-remote` | none | Server URL for `push`, `stats`, `insights`, `digest`, `export`, `query` and `mcp` (also `DASHD_REMOTE`) |
 | `-redact-paths` | `none` | For `push`: `home`, `basename` or `hash` project paths before sending |
 | `-models` | next to the binary, `~/.local/share/dashd`, `/usr/share/dashd` | OpenRouter price dump |
 | `-models-refresh` | `0` | Auto-update `models.json` on this interval (e.g. `24h`) and reprice |
@@ -123,6 +123,12 @@ internal/web/        HTTP handlers, templates, static assets
 ## Development
 
 ```bash
+make check          # fmt-check, go vet, staticcheck, go test -race ./..., coverage >= 80%
+```
+
+Or run individual checks:
+
+```bash
 go test ./...
 go test -race ./...
 go vet ./...
@@ -155,7 +161,30 @@ docker run -d -p 127.0.0.1:8753:8753 \
     -models /usr/local/lib/dashd/models.json -db /var/lib/dashd/dashboard.db
 ```
 
-Note that the container UID must match your local user to read `0700` agent directories, and the named volume must be owned by that UID.
+Note that the container UID must match your local user to read `0700` agent directories, and the named volume must be owned by that UID. The image ships a baked-in price dump at `/usr/local/lib/dashd/models.json`.
+
+### Sidecar push container
+
+If your coding agents run inside another container, you can attach a `dashd push` sidecar sharing the agent's log volume and pointing at your central server:
+
+```yaml
+  dashd:
+    image: ghcr.io/tonym128/dashd:latest
+    restart: unless-stopped
+    environment:
+      DASHD_REMOTE: "http://dashd-server:8753"
+      DASHD_INGEST_TOKEN: "${DASHD_INGEST_TOKEN:?set in .env}"
+    command:
+      - push
+      - -interval=60s
+      - -machine=my-service
+      - -home=/agent
+      - -state-db=/var/lib/dashd/push-state.db
+      - -models=/usr/local/lib/dashd/models.json
+    volumes:
+      - dashd-state:/var/lib/dashd
+      - agent-logs:/agent/.claude:ro
+```
 
 ## Remote server & multi-machine push
 
@@ -191,6 +220,43 @@ Give each machine the **ingest** token, not the dashboard token.
 The installers verify the download against the release's signed `checksums.txt`, store the token in a file only you can read, and install a service that restarts itself (systemd user unit, LaunchAgent, or a hidden scheduled task). `dashd status` shows the agent's last push and last error. Options include `--redact-paths`, `--auto-update 24h`, `--version` and `--uninstall`; see `install.sh --help`.
 
 Packages: release pages carry `.deb`, `.rpm` and Arch packages; there is a Homebrew formula (`brew install tonym128/tap/dashd`) and a Scoop manifest when the tap and bucket are set up, and a source [PKGBUILD](packaging/aur/PKGBUILD).
+
+## Upgrading & keeping up to date
+
+### Central server (Docker)
+
+Back up the database before major/schema-migrating upgrades, pull the latest image, and recreate the container (never run `docker compose down -v`, which deletes the database volume):
+
+```bash
+# Optional pre-upgrade backup (safe while serving)
+docker exec dashd-server dashd backup -db /var/lib/dashd/dashboard.db -out /var/lib/dashd/pre-upgrade.bak
+
+docker pull ghcr.io/tonym128/dashd:latest
+docker compose up -d
+```
+
+To pin or roll back to a specific release, set `image: ghcr.io/tonym128/dashd:v0.11.0` in `docker-compose.yml`.
+
+### Host push agents & CLI binaries
+
+```bash
+dashd self-update
+# Then restart your service manager:
+systemctl --user restart dashd-push.service   # Linux (systemd)
+# or pass --auto-update 24h to install.sh so push agents update themselves
+```
+
+### Keeping pricing current & verifying health
+
+Run the server with `-models-refresh 24h` (enabled in [docker-compose.yml](docker-compose.yml)) so `models.json` refreshes daily and pushes updates to clients automatically. For local-only installs, run `dashd update-models && dashd reprice`.
+
+Verify everything after an upgrade:
+
+```bash
+dashd -version
+dashd status    # shows push agent health and central server version
+dashd doctor    # checks logs, pricing, database and remote reachability
+```
 
 ## Read-only API, SQL queries & MCP
 
@@ -242,7 +308,20 @@ dashd query    -remote https://dashd.example.com -read-token-file ~/.config/dash
 }
 ```
 
-Omit `-remote` to run `dashd mcp` directly against the local SQLite database.
+Omit `-remote` to run `dashd mcp` directly against the local SQLite database. For clients that support remote **Streamable HTTP MCP**, point directly at `POST https://dashd.example.com/mcp` with `Authorization: Bearer <read-token>` (no local binary required):
+
+```json
+{
+  "mcpServers": {
+    "dashd": {
+      "url": "https://dashd.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_READ_TOKEN"
+      }
+    }
+  }
+}
+```
 
 ## Security
 
