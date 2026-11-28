@@ -26,7 +26,7 @@ const defaultCommand = "serve-and-scan"
 // commands is the complete set. It is a slice rather than inline cases in a
 // switch so that the same list can be printed in the error message and the
 // usage text, which is the only way those two stay in agreement.
-var commands = []string{"serve-and-scan", "serve", "scan", "push", "status", "reprice", "prune", "backup", "export", "digest", "update-models", "self-update", "doctor", "insights", "stats"}
+var commands = []string{"serve-and-scan", "serve", "scan", "push", "status", "reprice", "prune", "backup", "export", "digest", "update-models", "self-update", "doctor", "insights", "stats", "query", "mcp"}
 
 // options is the parsed command line.
 type options struct {
@@ -51,11 +51,13 @@ type options struct {
 	// authToken is empty unless -auth-token was given, which means "no
 	// authentication", not "authentication with an empty secret".
 	authToken   string
+	readToken   string
 	ingestToken string
 	adminToken  string
 	// The *File variants read a token from a file, which keeps it out of argv
 	// (world-readable via ps on Linux) and out of the environment.
 	authTokenFile     string
+	readTokenFile     string
 	ingestTokenFile   string
 	adminTokenFile    string
 	machineTokensFile string
@@ -91,9 +93,14 @@ type options struct {
 	out         string
 	webhookURL  string
 	digestEvery time.Duration
-	tagsFile    string
-	verbose     bool
-	showVer     bool
+	// query
+	sqlQuery   string
+	showSchema bool
+	queryLimit int
+
+	tagsFile string
+	verbose  bool
+	showVer  bool
 }
 
 // newFlagSet builds the flag set. It is separate so that both parseArgs and
@@ -130,11 +137,14 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 		"optional soft monthly spending budget in USD for alerts/insights")
 	fs.StringVar(&o.authToken, "auth-token", "",
 		"require/send this bearer token (also DASHD_AUTH_TOKEN); empty disables authentication")
+	fs.StringVar(&o.readToken, "read-token", "",
+		"optional read-only bearer token for dashboard, read APIs, /api/query and /mcp (also DASHD_READ_TOKEN); cannot ingest or run admin actions")
 	fs.StringVar(&o.ingestToken, "ingest-token", "",
 		"optional write-only bearer token for /api/ingest and /api/models (also DASHD_INGEST_TOKEN)")
 	fs.StringVar(&o.adminToken, "admin-token", "",
 		"optional token required for admin actions (reprice, prune, forget, rename); also DASHD_ADMIN_TOKEN. Without it the -auth-token grants admin")
 	fs.StringVar(&o.authTokenFile, "auth-token-file", "", "read -auth-token from this file (keeps it out of argv)")
+	fs.StringVar(&o.readTokenFile, "read-token-file", "", "read -read-token from this file")
 	fs.StringVar(&o.ingestTokenFile, "ingest-token-file", "", "read -ingest-token from this file")
 	fs.StringVar(&o.adminTokenFile, "admin-token-file", "", "read -admin-token from this file")
 	fs.StringVar(&o.machineTokensFile, "machine-tokens-file", "",
@@ -182,6 +192,9 @@ func newFlagSet(o *options, out io.Writer) *flag.FlagSet {
 		"POST budget alerts and digests to this URL (Slack/Discord-compatible JSON; also DASHD_WEBHOOK_URL)")
 	fs.DurationVar(&o.digestEvery, "digest-every", 0,
 		"with -webhook-url, send a usage digest on this interval (e.g. 168h for weekly); 0 disables")
+	fs.StringVar(&o.sqlQuery, "sql", "", "for 'query', a single read-only SQL query (SELECT, WITH, EXPLAIN)")
+	fs.BoolVar(&o.showSchema, "schema", false, "for 'query', print the SQLite schema instead of running SQL")
+	fs.IntVar(&o.queryLimit, "limit", 500, "for 'query', maximum rows to return (max 5000)")
 	fs.StringVar(&o.tagsFile, "tags-file", "",
 		"JSON file mapping a tag (client, team, cost centre) to a list of project path prefixes")
 	fs.BoolVar(&o.verbose, "verbose", false, "log every request and scan detail")
@@ -281,8 +294,10 @@ Commands:
   update-models   download the latest OpenRouter model pricing to -models
   self-update     download and install the latest dashd release binary
   doctor          check local agent logs, pricing, database, and remote server
-  insights        print plain-English usage and cost insights from the database
-  stats           print totals from the existing database, change nothing
+  insights        print plain-English usage and cost insights (local DB or -remote)
+  stats           print totals from the database (local DB or -remote)
+  query           run a read-only SQL query (-sql) or inspect -schema (local DB or -remote)
+  mcp             run a read-only Model Context Protocol (MCP) server over stdio (local DB or -remote)
 
 Flags:
 `)

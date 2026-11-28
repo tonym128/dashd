@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-28
+
+### Added
+
+- **Read-only token role** (`-read-token`, `-read-token-file`, `DASHD_READ_TOKEN`):
+  grants read-only access to the dashboard, JSON APIs, `/api/query`, and `/mcp`,
+  while refusing `/api/ingest`, `/api/reprice`, and `/api/admin/*`.
+- **Read-only JSON APIs** on `dashd serve`:
+  `GET /api/summary`, `GET /api/insights`, `GET /api/digest`, `GET /api/stats`,
+  `GET /api/schema`, and `POST`/`GET /api/query` (single read-only SQLite
+  `SELECT`/`WITH`/`EXPLAIN` statement enforced with `PRAGMA query_only = ON`,
+  timeout, and row cap).
+- **Remote-capable CLI & `query` command:** `dashd stats`, `insights`, `digest`,
+  `export`, and `query` (`-sql`, `-schema`, `-limit`, `-json`) now work against
+  a remote server via `-remote` + `-read-token` (or `-auth-token`) without
+  requiring a local database.
+- **Model Context Protocol (MCP) server:** `dashd mcp` (stdio, local DB or
+  `-remote`) and `POST /mcp` (Streamable HTTP on `dashd serve`) exposing
+  read-only tools (`get_summary`, `list_sessions`, `get_insights`, `get_digest`,
+  `get_schema`, `query_sql`).
+
 ## [0.10.1] - 2026-11-25
 
 ### Added

@@ -130,6 +130,25 @@ func run(o options, command string, stdout io.Writer) error {
 		return err
 	}
 
+	// Read-only commands with -remote talk to the central server over HTTP and
+	// do not touch a local database file.
+	if o.remote != "" {
+		switch command {
+		case "stats":
+			return runRemoteStats(ctx, o, stdout)
+		case "insights":
+			return runRemoteInsights(ctx, o, stdout)
+		case "digest":
+			return runRemoteDigest(ctx, o, stdout)
+		case "export":
+			return runRemoteExport(ctx, o, stdout)
+		case "query":
+			return runQuery(ctx, o, nil, stdout)
+		case "mcp":
+			return runMCP(ctx, o, nil, os.Stdin, stdout, log)
+		}
+	}
+
 	if command == "serve" || command == "serve-and-scan" {
 		if err := checkExposure(o); err != nil {
 			return err
@@ -168,6 +187,10 @@ func run(o options, command string, stdout io.Writer) error {
 		return runInsights(ctx, o, st, stdout)
 	case "digest":
 		return runDigest(ctx, o, st, stdout)
+	case "query":
+		return runQuery(ctx, o, st, stdout)
+	case "mcp":
+		return runMCP(ctx, o, st, os.Stdin, stdout, log)
 	case "prune":
 		if o.before == "" {
 			return fmt.Errorf("-before YYYY-MM-DD is required for prune")
@@ -315,7 +338,7 @@ func run(o options, command string, stdout io.Writer) error {
 	srv.RepriceFunc = func(rctx context.Context) (int, error) { return st.Reprice(rctx, priceFn) }
 	srv.ScanInfo = scanner.Status
 	srv.ScanDuration = scanner.LastDuration
-	srv.AuthEnabled = o.authToken != ""
+	srv.AuthEnabled = o.authToken != "" || o.readToken != ""
 	srv.PriceAdmin = priceAdmin{st, pricer}
 	srv.CatalogueModels = pricer.LiveModelKeys
 	srv.PriceStatus = &web.PriceStatus{}
@@ -371,13 +394,14 @@ func run(o options, command string, stdout io.Writer) error {
 	// about, so this file decides policy and web/ stays a dashboard.
 	var handler http.Handler = web.WithAuthConfig(web.AuthConfig{
 		UIToken:       o.authToken,
+		ReadToken:     o.readToken,
 		IngestToken:   o.ingestToken,
 		AdminToken:    o.adminToken,
 		MachineTokens: machineTokens,
 		TrustProxy:    o.trustProxy,
 		Log:           log,
 	}, srv.Handler())
-	if o.authToken == "" {
+	if o.authToken == "" && o.readToken == "" {
 		// With no token the Host header is the only thing standing between a
 		// DNS-rebinding page and the whole dashboard.
 		handler = web.WithHostCheck(splitList(o.allowedHosts), handler)
@@ -459,7 +483,7 @@ func checkExposure(o options) error {
 	if o.tlsCert != "" && o.tlsKey == "" || o.tlsCert == "" && o.tlsKey != "" {
 		return fmt.Errorf("-tls-cert and -tls-key must be given together")
 	}
-	if !exposedToNetwork(o.addr) || o.authToken != "" || o.insecureNoAuth {
+	if !exposedToNetwork(o.addr) || o.authToken != "" || o.readToken != "" || o.insecureNoAuth {
 		return nil
 	}
 	return fmt.Errorf("refusing to serve on %s without -auth-token: that would publish every project path, "+

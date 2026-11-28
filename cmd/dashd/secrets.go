@@ -22,6 +22,7 @@ func resolveSecrets(o *options) error {
 		flag string
 	}{
 		{&o.authToken, o.authTokenFile, "DASHD_AUTH_TOKEN", "-auth-token-file"},
+		{&o.readToken, o.readTokenFile, "DASHD_READ_TOKEN", "-read-token-file"},
 		{&o.ingestToken, o.ingestTokenFile, "DASHD_INGEST_TOKEN", "-ingest-token-file"},
 		{&o.adminToken, o.adminTokenFile, "DASHD_ADMIN_TOKEN", "-admin-token-file"},
 	} {

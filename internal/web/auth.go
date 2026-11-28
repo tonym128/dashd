@@ -16,9 +16,7 @@ import (
 	"time"
 )
 
-// Role is what an authenticated request is allowed to do. Roles are ordered:
-// each one includes everything below it, except that RoleIngest grants no read
-// access to the dashboard at all.
+// Role is what an authenticated request is allowed to do.
 type Role int
 
 const (
@@ -27,6 +25,10 @@ const (
 	// what a push agent on a laptop should hold, so a stolen laptop exposes the
 	// ability to add data, not to read everyone's.
 	RoleIngest
+	// RoleRead may read the dashboard, JSON APIs, read-only SQL query and MCP,
+	// nothing else. It cannot ingest data or run admin actions, making it safe
+	// to hand to LLMs, scripts and external services.
+	RoleRead
 	// RoleUI may read the dashboard and its JSON APIs, and ingest.
 	RoleUI
 	// RoleAdmin may additionally run state-changing maintenance: reprice,
@@ -38,6 +40,9 @@ const (
 type AuthConfig struct {
 	// UIToken protects the dashboard. Empty leaves the dashboard open.
 	UIToken string
+	// ReadToken is a read-only token for the dashboard, read APIs, /api/query
+	// and /mcp. It cannot ingest or run admin actions.
+	ReadToken string
 	// IngestToken is a write-only token for /api/ingest and /api/models.
 	IngestToken string
 	// AdminToken, when set, is required for admin routes. When empty the UI
@@ -54,7 +59,7 @@ type AuthConfig struct {
 }
 
 func (c AuthConfig) any() bool {
-	return c.UIToken != "" || c.IngestToken != "" || c.AdminToken != "" || len(c.MachineTokens) > 0
+	return c.UIToken != "" || c.ReadToken != "" || c.IngestToken != "" || c.AdminToken != "" || len(c.MachineTokens) > 0
 }
 
 // WithAuth requires a bearer token on every request except /healthz.
@@ -103,12 +108,36 @@ func routeRole(path string) Role {
 	case isAdminPath(path):
 		return RoleAdmin
 	default:
-		return RoleUI
+		return RoleRead
 	}
 }
 
 func isAdminPath(path string) bool {
 	return path == "/api/reprice" || strings.HasPrefix(path, "/api/admin/")
+}
+
+// roleAllows reports whether a request holding `have` satisfies a route needing
+// `need`. RoleIngest and RoleRead are intentionally disjoint: an ingest token
+// cannot read dashboard data (except /api/models), and a read token cannot
+// ingest data or run admin actions.
+func roleAllows(have, need Role, path string) bool {
+	switch need {
+	case RoleNone:
+		return true
+	case RoleIngest:
+		if path == "/api/models" && have == RoleRead {
+			return true
+		}
+		return have == RoleIngest || have >= RoleUI
+	case RoleRead:
+		return have >= RoleRead
+	case RoleUI:
+		return have >= RoleUI
+	case RoleAdmin:
+		return have >= RoleAdmin
+	default:
+		return false
+	}
 }
 
 // required reports the role a route needs given what is configured. A route
@@ -118,15 +147,15 @@ func (a *authHandler) required(path string) Role {
 	need := routeRole(path)
 	switch need {
 	case RoleIngest:
-		if a.cfg.UIToken == "" && a.cfg.IngestToken == "" && a.cfg.AdminToken == "" && len(a.cfg.MachineTokens) == 0 {
+		if !a.cfg.any() {
 			return RoleNone
 		}
-	case RoleUI:
-		if a.cfg.UIToken == "" && a.cfg.AdminToken == "" {
+	case RoleRead, RoleUI:
+		if a.cfg.UIToken == "" && a.cfg.ReadToken == "" && a.cfg.AdminToken == "" {
 			return RoleNone
 		}
 	case RoleAdmin:
-		if a.cfg.UIToken == "" && a.cfg.AdminToken == "" {
+		if a.cfg.UIToken == "" && a.cfg.ReadToken == "" && a.cfg.AdminToken == "" {
 			// No token protects admin routes; the server's loopback rule
 			// (see adminAllowed) decides instead.
 			return RoleNone
@@ -160,7 +189,7 @@ func (a *authHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if role < need {
+	if !roleAllows(role, need, r.URL.Path) {
 		a.reject(w, r, need)
 		return
 	}
@@ -194,7 +223,7 @@ func (a *authHandler) reject(w http.ResponseWriter, r *http.Request, need Role) 
 	// A browser navigating to the dashboard gets the login form instead of a
 	// bare 401, which is the only way a token-protected dashboard is usable
 	// without a header-injecting proxy.
-	if need >= RoleUI && r.Method == http.MethodGet && acceptsHTML(r) {
+	if need >= RoleRead && r.Method == http.MethodGet && acceptsHTML(r) {
 		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 		return
 	}
@@ -236,6 +265,9 @@ func (a *authHandler) roleForToken(tok string) (Role, string) {
 		}
 		return RoleUI, ""
 	}
+	if a.cfg.ReadToken != "" && constantTimeMatch(a.cfg.ReadToken, tok) {
+		return RoleRead, ""
+	}
 	if a.cfg.IngestToken != "" && constantTimeMatch(a.cfg.IngestToken, tok) {
 		return RoleIngest, ""
 	}
@@ -262,8 +294,11 @@ const cookieName = "dashd_auth"
 // invalidates every cookie minted from it, which is what rotation should do.
 func cookieValue(role Role, key string) string {
 	name := "ui"
-	if role == RoleAdmin {
+	switch role {
+	case RoleAdmin:
 		name = "admin"
+	case RoleRead:
+		name = "read"
 	}
 	m := hmac.New(sha256.New, []byte(key))
 	m.Write([]byte("dashd-cookie-v1:" + name))
@@ -287,6 +322,10 @@ func (a *authHandler) roleForCookie(v string) Role {
 	case "ui":
 		if a.cfg.UIToken != "" && hmac.Equal([]byte(v), []byte(cookieValue(RoleUI, a.cfg.UIToken))) {
 			return RoleUI
+		}
+	case "read":
+		if a.cfg.ReadToken != "" && hmac.Equal([]byte(v), []byte(cookieValue(RoleRead, a.cfg.ReadToken))) {
+			return RoleRead
 		}
 	}
 	return RoleNone
@@ -351,7 +390,7 @@ func (a *authHandler) serveLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		role, _ := a.roleForToken(strings.TrimSpace(r.PostFormValue("token")))
-		if role < RoleUI {
+		if role < RoleRead {
 			if a.failLog.allow("login:"+ip, time.Now()) {
 				a.cfg.Log.Warn("failed dashboard login", "ip", ip)
 			}
@@ -359,8 +398,11 @@ func (a *authHandler) serveLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		key := a.cfg.UIToken
-		if role == RoleAdmin && a.cfg.AdminToken != "" {
+		switch {
+		case role == RoleAdmin && a.cfg.AdminToken != "":
 			key = a.cfg.AdminToken
+		case role == RoleRead:
+			key = a.cfg.ReadToken
 		}
 		http.SetCookie(w, &http.Cookie{
 			Name:     cookieName,

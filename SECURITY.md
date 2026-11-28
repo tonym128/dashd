@@ -36,12 +36,14 @@ What the default does not cover:
 ### Authentication and roles
 
 A network-exposed instance needs a token, and dashd enforces that: a
-non-loopback `-addr` without `-auth-token` is refused at startup unless
-`-insecure-no-auth` is passed. There are three roles, each with its own token:
+non-loopback `-addr` without `-auth-token` (or `-read-token`) is refused at
+startup unless `-insecure-no-auth` is passed. There are four roles, each with
+its own token:
 
 | Token | Grants | Give it to |
 |---|---|---|
 | `-ingest-token` | `POST /api/ingest`, `GET /api/models` only | push agents (laptops) |
+| `-read-token` | read-only access to the dashboard, read APIs (`/api/summary`, `/api/insights`, `/api/digest`, `/api/stats`, `/api/sessions`, `/api/export`, `/api/schema`, `/api/query`, `/api/models`) and `/mcp`; cannot ingest or run admin actions | LLMs, MCP clients, scripts, external services |
 | `-auth-token` | the dashboard and its read APIs, plus ingest; also admin when no admin token is set | people, Grafana |
 | `-admin-token` | reprice, prune, forget a session, rename a machine | whoever maintains the server |
 
@@ -63,11 +65,11 @@ With no token at all, admin endpoints answer only requests from loopback.
 A flag value is in the process's `argv`, which on Linux is readable by every
 local user through `ps`. So:
 
-* Prefer `-auth-token-file`, `-ingest-token-file` and `-admin-token-file`: a
-  file holding only the token, mode 0600 (dashd warns if it is readable by
-  others). The installers write the token this way.
-* `DASHD_AUTH_TOKEN`, `DASHD_INGEST_TOKEN` and `DASHD_ADMIN_TOKEN` also work,
-  and are what `docker-compose.yml` uses.
+* Prefer `-auth-token-file`, `-read-token-file`, `-ingest-token-file` and
+  `-admin-token-file`: a file holding only the token, mode 0600 (dashd warns
+  if it is readable by others). The installers write the token this way.
+* `DASHD_AUTH_TOKEN`, `DASHD_READ_TOKEN`, `DASHD_INGEST_TOKEN` and
+  `DASHD_ADMIN_TOKEN` also work, and are what `docker-compose.yml` uses.
 * The order is: flag, then file, then environment.
 
 The token is transport-level only. Put TLS in front (Caddy, Tailscale, or

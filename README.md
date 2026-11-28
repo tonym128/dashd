@@ -33,13 +33,15 @@ go build -o dashd ./cmd/dashd
 | `reprice` | Recompute every stored cost (and day bucket) at the price in force when each call was made |
 | `prune` | Delete calls before `-before YYYY-MM-DD`; pruned history is not re-ingested |
 | `backup` | Write a consistent copy of the database to `-out` (safe while serving) |
-| `export` | Write calls as CSV or JSON (`-format`, `-out`, filter flags) |
-| `digest` | Print a Markdown usage digest, or POST it to `-webhook-url` |
-| `insights` | Print usage insights (`-json`, filter flags) |
+| `export` | Write calls as CSV or JSON (`-format`, `-out`, filter flags; supports `-remote`) |
+| `digest` | Print a Markdown usage digest, or POST it to `-webhook-url` (supports `-remote`) |
+| `insights` | Print usage insights (`-json`, filter flags; supports `-remote`) |
+| `query` | Run a read-only SQL query (`-sql`) or inspect `-schema` (local DB or `-remote`) |
+| `mcp` | Run a read-only Model Context Protocol (MCP) server over stdio (local DB or `-remote`) |
 | `update-models` | Download the latest OpenRouter model pricing to `-models` |
 | `self-update` | Install the latest release (checksum-verified, never downgrades) |
 | `doctor` | Check agent logs, pricing, the database and the remote server |
-| `stats` | Print a summary of the database and the last scan of each source |
+| `stats` | Print a summary of the database and the last scan of each source (supports `-remote`) |
 
 ## Common flags
 
@@ -50,6 +52,7 @@ go build -o dashd ./cmd/dashd
 | `-db` | `~/.local/share/dashd/dashboard.db` | Database path |
 | `-addr` | `127.0.0.1:8753` | Listen address; a non-loopback address requires a token |
 | `-auth-token-file` / `-auth-token` | none | Dashboard token (also `DASHD_AUTH_TOKEN`); browsers sign in at `/login` |
+| `-read-token-file` / `-read-token` | none | Read-only token for dashboard, read APIs, `/api/query` and `/mcp` (also `DASHD_READ_TOKEN`); cannot ingest or run admin actions |
 | `-ingest-token-file` / `-ingest-token` | none | Write-only token for push agents (also `DASHD_INGEST_TOKEN`) |
 | `-admin-token-file` / `-admin-token` | none | Token for reprice/prune/forget/rename (also `DASHD_ADMIN_TOKEN`) |
 | `-machine-tokens-file` | none | `machine token` lines; each token may only push as its machine |

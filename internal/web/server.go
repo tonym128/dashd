@@ -135,6 +135,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/admin/rename-machine", s.handleAdminRenameMachine)
 	mux.HandleFunc("/api/sessions", s.handleSessionsAPI)
 	mux.HandleFunc("/api/export", s.handleExport)
+	mux.HandleFunc("/api/summary", s.handleSummaryAPI)
+	mux.HandleFunc("/api/insights", s.handleInsightsAPI)
+	mux.HandleFunc("/api/digest", s.handleDigestAPI)
+	mux.HandleFunc("/api/stats", s.handleStatsAPI)
+	mux.HandleFunc("/api/schema", s.handleSchemaAPI)
+	mux.HandleFunc("/api/query", s.handleQueryAPI)
+	mux.HandleFunc("/mcp", s.handleMCP)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.Handle("/session", http.HandlerFunc(s.handleSession))
 	// Outermost, so the headers are on every response the dashboard produces —
